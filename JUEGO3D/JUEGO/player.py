@@ -5,74 +5,45 @@ import math
 
 
 class SpeedLine(Entity):
-    """NUEVO: Línea de velocidad individual en 2D que radia desde el centro hacia los bordes"""
+    """Línea de velocidad individual en 2D que radia desde el centro hacia los bordes"""
 
     def __init__(self, **kwargs):
-        super().__init__(
-            parent=camera.ui,
-            model='quad',
-            # Nacen con un color blanco/azul sutil y translúcido
-            color=color.rgba(200, 240, 255, 70),
-            z=-1.1,  # Detrás de la retícula pero al frente del espacio
-            **kwargs
-        )
-        # Calculamos un ángulo aleatorio en radianes (360 grados)
+        super().__init__(parent=camera.ui, model='quad', color=color.rgba(200, 240, 255, 70), z=-1.1, **kwargs)
         self.angle = random.uniform(0, math.tau)
-
-        # Distancia inicial desde el centro (para dejar libre la zona de la retícula)
         self.distance = random.uniform(0.15, 0.35)
-
-        # Velocidad de expulsión y escala de la línea
         self.speed = random.uniform(4.0, 7.0)
         self.max_scale_y = random.uniform(0.06, 0.18)
         self.scale = (0.0015, 0.01)
-
-        # Rotamos la línea para que apunte perfectamente hacia afuera desde el centro
         self.rotation_z = math.degrees(self.angle) - 90
         self.update_position()
 
     def update_position(self):
-        # Trigonometría básica para mover la línea radialmente
         self.x = math.cos(self.angle) * self.distance
         self.y = math.sin(self.angle) * self.distance
 
     def update(self):
-        # La línea viaja hacia el borde de la pantalla
         self.distance += self.speed * time.dt
-
-        # Efecto estiramiento: entre más lejos, más larga se hace la línea (efecto cinético)
         self.scale_y = min(self.max_scale_y, self.distance * 0.4)
         self.update_position()
-
-        # Desvanecimiento por transparencia conforme se acerca a los límites físicos del HUD
-        if self.distance > 0.6:
-            self.alpha -= time.dt * 5
-
-        # Auto-destrucción al salir de la pantalla o volverse invisible
-        if self.distance > 1.2 or self.alpha <= 0:
-            destroy(self)
+        if self.distance > 0.6: self.alpha -= time.dt * 5
+        if self.distance > 1.2 or self.alpha <= 0: destroy(self)
 
 
 class PlayerShip(Entity):
-    """Clase de la nave con Screen Shake, Banking, Dash, Escudos, Inercia de Cámara y Líneas de Velocidad"""
+    """Clase de la nave maestra adaptada para soportar marioneta cinemática y físicas avanzadas"""
 
     def __init__(self, game_over_menu=None, **kwargs):
-        super().__init__(
-            model='assets/nave1/SpaceShip.obj',
-            color=color.white,
-            scale=(0.2, 0.2, 0.2),
-            position=(0, 0, 0),
-            collider='box',
-            **kwargs
-        )
+        super().__init__(model='assets/nave1/SpaceShip.obj', color=color.white, scale=(0.2, 0.2, 0.2),
+                         position=(0, 0, 0), collider='box', **kwargs)
 
         self.game_over_menu = game_over_menu
         self.is_dead = False
+        self.is_cinematic = False
 
         self.max_shield = 100
         self.shield = 100
         self.error_spawn_timer = 0.0
-        self.speed_line_timer = 0.0  # Temporizador para la densidad de las líneas de velocidad
+        self.speed_line_timer = 0.0
 
         self.right_laser_offset = (2.4, -0.5, -0.6)
         self.left_laser_offset = (-2.4, -0.5, -0.6)
@@ -102,10 +73,7 @@ class PlayerShip(Entity):
         self.dash_direction = 0
         self.dash_speed = 180
         self.dash_roll = 0.0
-
-        # INERCIA DE CÁMARA
-        self.camera_drag_intensity = 4.5
-        self.camera_dash_drag = 0.8
+        self.camera_dash_drag = 0.3
 
         self.shake_amount = 0.0
         self.shake_decay = 12.0
@@ -116,16 +84,10 @@ class PlayerShip(Entity):
         self.boost_timer = 0
         self.trail_timer = 0
 
-        # PROPULSORES DOBLES DE PLASMA (Z = 1.1 RESPETADO)
         self.thrusters = []
         for offset_x in [-0.6, 0.6]:
-            t = Entity(
-                parent=self,
-                model='sphere',
-                color=color.cyan,
-                scale=(0.2, 0.2, 0.6),
-                position=(offset_x, -0.15, 1.1)  # Tu cambio se mantiene intacto aquí
-            )
+            t = Entity(parent=self, model='sphere', color=color.cyan, scale=(0.2, 0.2, 0.6),
+                       position=(offset_x, -0.15, 1.1))
             self.thrusters.append(t)
 
         self.camera_pivot = Entity(parent=self)
@@ -137,83 +99,80 @@ class PlayerShip(Entity):
         self.base_fov = camera.fov
         mouse.locked = True
 
-        # INTERFAZ (HUD)
-        self.damage_flash_overlay = Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0),
+        self.hud_container = Entity(parent=camera.ui)
+
+        self.cine_text = Text(parent=self.hud_container, text='', origin=(0, 0), position=(0, 0.15), scale=2,
+                              color=color.rgba(255, 255, 255, 0), enabled=False, z=-2)
+        self.damage_flash_overlay = Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 0, 0, 0),
                                            scale=(99, 99), z=-1.5)
 
         self.hud_borders = []
         self.hud_borders.append(
-            Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), scale=(0.04, 2.0),
+            Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 0, 0, 0), scale=(0.04, 2.0),
                    position=(-0.86, 0), z=-1.4))
         self.hud_borders.append(
-            Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), scale=(0.04, 2.0),
+            Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 0, 0, 0), scale=(0.04, 2.0),
                    position=(0.86, 0), z=-1.4))
         self.hud_borders.append(
-            Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), scale=(2.0, 0.04),
+            Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 0, 0, 0), scale=(2.0, 0.04),
                    position=(0, 0.48), z=-1.4))
         self.hud_borders.append(
-            Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), scale=(2.0, 0.04),
+            Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 0, 0, 0), scale=(2.0, 0.04),
                    position=(0, -0.48), z=-1.4))
 
         self.screen_cracks = []
         for _ in range(8):
-            crack = Entity(
-                parent=camera.ui,
-                model='quad',
-                color=color.rgba(200, 230, 255, 140),
-                scale=(random.uniform(0.15, 0.45), 0.003),
-                position=(random.uniform(-0.6, 0.6), random.uniform(-0.4, 0.4)),
-                rotation_z=random.uniform(0, 360),
-                enabled=False,
-                z=-2
-            )
+            crack = Entity(parent=self.hud_container, model='quad', color=color.rgba(200, 230, 255, 140),
+                           scale=(random.uniform(0.15, 0.45), 0.003),
+                           position=(random.uniform(-0.6, 0.6), random.uniform(-0.4, 0.4)),
+                           rotation_z=random.uniform(0, 360), enabled=False, z=-2)
             self.screen_cracks.append(crack)
 
-        self.crosshair = Entity(parent=camera.ui, model='quad', color=color.rgba(255, 255, 255, 200),
+        self.crosshair = Entity(parent=self.hud_container, model='quad', color=color.rgba(255, 255, 255, 200),
                                 scale=(0.006, 0.006), position=(0, 0))
-        self.warning_text = Text(text='¡PELIGRO: NAVE INVERTIDA!', position=(0, 0.25), origin=(0, 0), color=color.red,
-                                 scale=1.5, enabled=False)
+        self.warning_text = Text(parent=self.hud_container, text='¡PELIGRO: NAVE INVERTIDA!', position=(0, 0.25),
+                                 origin=(0, 0), color=color.red, scale=1.5, enabled=False)
 
         tacho_center_x = -0.72
         tacho_center_y = -0.32
 
-        self.tacho_bg = Entity(parent=camera.ui, model='circle', color=color.hex('#111111'), scale=0.25,
+        self.tacho_bg = Entity(parent=self.hud_container, model='circle', color=color.hex('#111111'), scale=0.25,
                                position=(tacho_center_x, tacho_center_y), z=1)
         self.tacho_needle = Entity(parent=self.tacho_bg, model='quad', color=color.hex('#ff3333'), scale=(0.02, 0.45),
                                    origin=(0, -0.5), position=(0, 0), rotation_z=-130, z=-0.1)
         Entity(parent=self.tacho_bg, model='circle', color=color.black, scale=0.15, z=-0.2)
 
-        Text(parent=camera.ui, text='0', position=(tacho_center_x - 0.08, tacho_center_y - 0.08), origin=(0, 0),
-             scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=camera.ui, text='45', position=(tacho_center_x - 0.09, tacho_center_y + 0.02), origin=(0, 0),
-             scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=camera.ui, text='90', position=(tacho_center_x - 0.04, tacho_center_y + 0.08), origin=(0, 0),
-             scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=camera.ui, text='135', position=(tacho_center_x + 0.04, tacho_center_y + 0.08), origin=(0, 0),
-             scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=camera.ui, text='180', position=(tacho_center_x + 0.09, tacho_center_y + 0.02), origin=(0, 0),
-             scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=camera.ui, text='220', position=(tacho_center_x + 0.08, tacho_center_y - 0.08), origin=(0, 0),
-             scale=0.9, color=color.red, z=-1)
+        Text(parent=self.hud_container, text='0', position=(tacho_center_x - 0.08, tacho_center_y - 0.08),
+             origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
+        Text(parent=self.hud_container, text='45', position=(tacho_center_x - 0.09, tacho_center_y + 0.02),
+             origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
+        Text(parent=self.hud_container, text='90', position=(tacho_center_x - 0.04, tacho_center_y + 0.08),
+             origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
+        Text(parent=self.hud_container, text='135', position=(tacho_center_x + 0.04, tacho_center_y + 0.08),
+             origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
+        Text(parent=self.hud_container, text='180', position=(tacho_center_x + 0.09, tacho_center_y + 0.02),
+             origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
+        Text(parent=self.hud_container, text='220', position=(tacho_center_x + 0.08, tacho_center_y - 0.08),
+             origin=(0, 0), scale=0.9, color=color.red, z=-1)
 
-        self.speedometer = Text(parent=camera.ui, text='0', position=(tacho_center_x, tacho_center_y + 0.02),
+        self.speedometer = Text(parent=self.hud_container, text='0', position=(tacho_center_x, tacho_center_y + 0.02),
                                 origin=(0, 0), scale=3, color=color.white, z=-1)
-        Text(parent=camera.ui, text='KM/H', position=(tacho_center_x, tacho_center_y - 0.04), origin=(0, 0), scale=1.0,
-             color=color.gray, z=-1)
+        Text(parent=self.hud_container, text='KM/H', position=(tacho_center_x, tacho_center_y - 0.04), origin=(0, 0),
+             scale=1.0, color=color.gray, z=-1)
 
-        self.boost_bar_bg = Entity(parent=camera.ui, model='quad', color=color.rgba(30, 35, 40, 250),
+        self.boost_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.rgba(30, 35, 40, 250),
                                    scale=(0.02, 0.18), position=(tacho_center_x + 0.16, tacho_center_y), z=1)
         self.boost_bar = Entity(parent=self.boost_bar_bg, model='quad', color=color.cyan, scale=(1, 1),
                                 position=(0, -0.5), origin=(0, -0.5), z=-1)
-        Text(parent=camera.ui, text='TURBO', position=(tacho_center_x + 0.16, tacho_center_y - 0.11), origin=(0, 0),
-             scale=0.8, color=color.white, z=-1)
+        Text(parent=self.hud_container, text='TURBO', position=(tacho_center_x + 0.16, tacho_center_y - 0.11),
+             origin=(0, 0), scale=0.8, color=color.white, z=-1)
 
-        self.shield_bar_bg = Entity(parent=camera.ui, model='quad', color=color.rgba(30, 35, 40, 250),
+        self.shield_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.rgba(30, 35, 40, 250),
                                     scale=(0.02, 0.18), position=(tacho_center_x + 0.22, tacho_center_y), z=1)
         self.shield_bar = Entity(parent=self.shield_bar_bg, model='quad', color=color.blue, scale=(1, 1),
                                  position=(0, -0.5), origin=(0, -0.5), z=-1)
-        Text(parent=camera.ui, text='ESCUDO', position=(tacho_center_x + 0.22, tacho_center_y - 0.11), origin=(0, 0),
-             scale=0.7, color=color.white, z=-1)
+        Text(parent=self.hud_container, text='ESCUDO', position=(tacho_center_x + 0.22, tacho_center_y - 0.11),
+             origin=(0, 0), scale=0.7, color=color.white, z=-1)
 
         self.base_fire_rate = 0.45
         self.min_fire_rate = 0.08
@@ -223,15 +182,14 @@ class PlayerShip(Entity):
         self.max_heat = 100
         self.overheated = False
 
-        self.heat_bar_bg = Entity(parent=camera.ui, model='quad', color=color.dark_gray, scale=(0.3, 0.02),
+        self.heat_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.dark_gray, scale=(0.3, 0.02),
                                   position=(0, -0.45), z=1)
         self.heat_bar = Entity(parent=self.heat_bar_bg, model='quad', color=color.orange, scale=(0, 1),
                                position=(-0.5, 0), origin=(-0.5, 0), z=-1)
-        self.overheat_text = Text(parent=camera.ui, text='', origin=(0, 0), position=(0, -0.35), color=color.red,
-                                  scale=1.5, z=-1)
+        self.overheat_text = Text(parent=self.hud_container, text='', origin=(0, 0), position=(0, -0.35),
+                                  color=color.red, scale=1.5, z=-1)
 
     def generate_trail(self):
-        """Genera estelas de esferas difuminadas laterales libres del centro"""
         self.trail_timer -= time.dt
         if self.trail_timer <= 0:
             for offset_x in [-0.6, 0.6]:
@@ -260,45 +218,34 @@ class PlayerShip(Entity):
         self.boost_timer = self.boost_recharge_delay
 
     def take_damage(self, amount):
-        if self.is_dead:
-            return
+        if self.is_dead or self.is_cinematic: return
         self.shield -= amount
         self.shield = max(0, self.shield)
         self.shake_amount = clamp(self.shake_amount + 0.4, 0, 0.9)
         self.damage_flash_overlay.alpha = 0.5
-        if self.shield <= 0:
-            self.die()
+        if self.shield <= 0: self.die()
 
     def repair_shield(self, amount):
-        if self.is_dead:
-            return
+        if self.is_dead: return
         self.shield += amount
         self.shield = min(self.max_shield, self.shield)
         if self.shield > 15:
-            for crack in self.screen_cracks:
-                crack.enabled = False
-            for b in self.hud_borders:
-                b.alpha = 0
+            for crack in self.screen_cracks: crack.enabled = False
+            for b in self.hud_borders: b.alpha = 0
 
     def die(self):
         self.is_dead = True
-        self.damage_flash_overlay.alpha = 0
-        for b in self.hud_borders:
-            b.alpha = 0
-        for crack in self.screen_cracks:
-            crack.enabled = False
+        self.hud_container.disable()
         camera.ui.x = 0
         camera.ui.y = 0
         self.camera_pivot.position = Vec3(0, 0, 0)
-
-        if self.game_over_menu:
-            self.game_over_menu.enabled = True
+        if self.game_over_menu: self.game_over_menu.enabled = True
         mouse.locked = False
         self.visible = False
         self.collider = None
 
     def reset_ship(self):
-        """Restablece la nave de forma limpia"""
+        self.is_cinematic = False
         self.position = (0, 0, 0)
         self.rotation = (0, 0, 0)
         self.base_pitch = 0.0
@@ -317,16 +264,15 @@ class PlayerShip(Entity):
         self.heat_bar.color = color.orange
         self.tacho_needle.color = color.hex('#ff3333')
         self.speedometer.color = color.white
+
+        self.hud_container.enable()
         self.damage_flash_overlay.alpha = 0
         camera.ui.x = 0
         camera.ui.y = 0
         self.camera_pivot.position = Vec3(0, 0, 0)
-        for b in self.hud_borders:
-            b.alpha = 0
-        for crack in self.screen_cracks:
-            crack.enabled = False
-        for t in self.thrusters:
-            t.visible = True
+        for b in self.hud_borders: b.alpha = 0
+        for crack in self.screen_cracks: crack.enabled = False
+        for t in self.thrusters: t.visible = True
 
     def update(self):
         if self.is_dead:
@@ -334,10 +280,20 @@ class PlayerShip(Entity):
             self.speedometer.text = str(int(abs(self.current_speed)))
             self.tacho_needle.rotation_z = -130 + (clamp(abs(self.current_speed) / self.boost_max_speed, 0, 1) * 260)
             self.warning_text.enabled = False
-            self.camera_pivot.position = lerp(self.camera_pivot.position, Vec3(0, 0, 0), time.dt * 5)
+            self.camera_pivot.position = lerp(self.camera_pivot.position, Vec3(0, 0, 0), time.dt * 15)
             for t in self.thrusters:
                 t.scale_z = lerp(t.scale_z, 0, time.dt * 15)
                 t.visible = False
+            return
+
+        # ==========================================================
+        # CONTROL DE TRANSICIÓN: Durante la fase final de escaneo
+        # ==========================================================
+        if self.is_cinematic:
+            # Propulsores en ralentí espacial estable
+            for t in self.thrusters:
+                t.scale_z = lerp(t.scale_z, random.uniform(0.3, 0.5), time.dt * 12)
+                t.color = color.rgba(0, 180, 255, 120)
             return
 
         hit_info = self.intersects()
@@ -355,36 +311,28 @@ class PlayerShip(Entity):
         target_cam_offset_x = 0
         target_cam_offset_y = 0
 
-        # EN ENTORNO CRÍTICO (BORDES PALPITANTES)
         if self.shield <= 15:
             pulso_alerta = 0.3 + math.sin(time.time() * 12) * 0.15
-            for b in self.hud_borders:
-                b.alpha = pulso_alerta
-            for crack in self.screen_cracks:
-                crack.enabled = True
-
+            for b in self.hud_borders: b.alpha = pulso_alerta
+            for crack in self.screen_cracks: crack.enabled = True
             camera.fov += random.uniform(-0.8, 0.8)
             camera.ui.x = random.uniform(-0.006, 0.006)
             camera.ui.y = random.uniform(-0.006, 0.006)
 
             self.error_spawn_timer -= time.dt
             if self.error_spawn_timer <= 0:
-                mensajes_error = [
-                    "SISTEMA DEFECTUOSO", "NÚCLEO CRÍTICO", "ERROR: 0x00F8C3",
-                    "FUGA DE VOLTAJE", "FALLO ESTRUCTURAL", "PRESIÓN BAJA"
-                ]
+                mensajes_error = ["SISTEMA DEFECTUOSO", "NÚCLEO CRÍTICO", "ERROR: 0x00F8C3", "FUGA DE VOLTAJE",
+                                  "FALLO ESTRUCTURAL", "PRESIÓN BAJA"]
                 err_txt = Text(text=random.choice(mensajes_error),
                                position=(random.uniform(-0.4, 0.4), random.uniform(-0.2, 0.2)), color=color.red,
-                               scale=random.uniform(1.1, 1.5), parent=camera.ui)
+                               scale=random.uniform(1.1, 1.5), parent=self.hud_container)
                 destroy(err_txt, delay=random.uniform(0.15, 0.3))
                 self.error_spawn_timer = random.uniform(0.25, 0.55)
         else:
-            for b in self.hud_borders:
-                b.alpha = 0
+            for b in self.hud_borders: b.alpha = 0
             camera.ui.x = 0
             camera.ui.y = 0
 
-        # HUD Escudos
         self.shield_bar.scale_y = self.shield / self.max_shield
         self.shield_bar.color = color.red if self.shield <= 15 else color.blue
 
@@ -395,23 +343,16 @@ class PlayerShip(Entity):
 
         is_boosting = held_keys['space'] and self.boost_fuel > 0
 
-        # ==========================================================
-        # MODIFICADO: GESTIÓN DE TURBO CON LAS NUEVAS SPEED LINES
-        # ==========================================================
         if is_boosting:
             self.target_speed = self.boost_max_speed
             self.boost_fuel -= 18 * time.dt
             self.boost_timer = self.boost_recharge_delay
             self.generate_trail()
             self.shake_amount = max(self.shake_amount, 0.15)
-
-            # NUEVO: Desatar el enjambre de líneas de velocidad radiales
             self.speed_line_timer -= time.dt
             if self.speed_line_timer <= 0:
-                # Instanciamos 3 líneas por frame para darle densidad al túnel
-                for _ in range(3):
-                    SpeedLine()
-                self.speed_line_timer = 0.015  # Tasa de refresco ultra rápida
+                for _ in range(3): SpeedLine()
+                self.speed_line_timer = 0.015
         elif held_keys['w']:
             self.target_speed = self.normal_max_speed
         elif held_keys['s']:
@@ -424,7 +365,6 @@ class PlayerShip(Entity):
         self.position += self.forward * self.current_speed * time.dt
         camera.fov = lerp(camera.fov, self.base_fov + (abs(self.current_speed) * 0.35), time.dt * 5)
 
-        # CONTROL DE PROPULSORES TRASEROS
         if is_boosting:
             target_scale_z = random.uniform(3.5, 4.8)
             thruster_color = color.rgb(0, 255, 255)
@@ -448,8 +388,7 @@ class PlayerShip(Entity):
                 t.scale_x = lerp(t.scale_x, 0.2, time.dt * 10)
                 t.scale_y = 0.2
 
-        if self.dash_timer > 0:
-            self.dash_timer -= time.dt
+        if self.dash_timer > 0: self.dash_timer -= time.dt
 
         if self.is_dashing:
             self.dash_time_left -= time.dt
@@ -470,7 +409,6 @@ class PlayerShip(Entity):
 
         display_speed = int(abs(self.current_speed))
         self.speedometer.text = str(display_speed)
-
         speed_ratio = clamp(abs(self.current_speed) / self.boost_max_speed, 0, 1)
         self.tacho_needle.rotation_z = -130 + (speed_ratio * 260)
 
@@ -481,7 +419,6 @@ class PlayerShip(Entity):
             self.tacho_needle.color = color.hex('#ff3333')
             self.speedometer.color = color.white
 
-        # GESTIÓN DE CÁMARA E INERCIA DE MIRA
         if held_keys['right mouse']:
             self.camera_pivot.rotation_y += mouse.velocity[0] * self.mouse_sensitivity
             self.camera_pivot.rotation_x -= mouse.velocity[1] * self.mouse_sensitivity
@@ -494,8 +431,6 @@ class PlayerShip(Entity):
             self.rotation_y += mouse.velocity[0] * self.mouse_sensitivity
             self.base_pitch -= mouse.velocity[1] * self.mouse_sensitivity
 
-            pitch_overshoot = clamp(mouse.velocity[1] * 600, -self.max_pitch_banking, self.max_pitch_banking)
-
             accel_pitch = 0
             if is_boosting:
                 accel_pitch = 8.0
@@ -504,23 +439,21 @@ class PlayerShip(Entity):
             elif held_keys['s']:
                 accel_pitch = -3.0
 
-            target_pitch = self.base_pitch - pitch_overshoot + accel_pitch
+            target_pitch = self.base_pitch + accel_pitch
             self.rotation_x = lerp(self.rotation_x, target_pitch, time.dt * 12)
 
             visual_pitch_offset = self.rotation_x - self.base_pitch
-            self.camera_pivot.rotation_x = lerp(self.camera_pivot.rotation_x, -visual_pitch_offset, time.dt * 10)
+            self.camera_pivot.rotation_x = lerp(self.camera_pivot.rotation_x, -visual_pitch_offset, time.dt * 12)
 
-            target_cam_offset_x = -mouse.velocity[0] * self.camera_drag_intensity
-            target_cam_offset_y = -mouse.velocity[1] * self.camera_drag_intensity
+            target_cam_offset_x = 0
+            target_cam_offset_y = 0
 
-        if self.is_dashing:
-            target_cam_offset_x -= self.dash_direction * self.camera_dash_drag
-
+        if self.is_dashing: target_cam_offset_x -= self.dash_direction * self.camera_dash_drag
         target_cam_offset_x = clamp(target_cam_offset_x, -1.2, 1.2)
         target_cam_offset_y = clamp(target_cam_offset_y, -0.7, 0.7)
 
         self.camera_pivot.position = lerp(self.camera_pivot.position, Vec3(target_cam_offset_x, target_cam_offset_y, 0),
-                                          time.dt * 6)
+                                          time.dt * 18)
 
         base_z_target = self.rotation_z
         if held_keys['q']:
@@ -545,8 +478,7 @@ class PlayerShip(Entity):
                 self.rotation_z = lerp(self.rotation_z, target_z, time.dt * self.level_damping)
             base_z_target = target_z
 
-        if self.is_dashing:
-            self.rotation_z = base_z_target + self.dash_roll
+        if self.is_dashing: self.rotation_z = base_z_target + self.dash_roll
 
         self.camera_pivot.world_rotation_z = 0
 
@@ -560,36 +492,25 @@ class PlayerShip(Entity):
             camera.x = base_cam_pos[0]
             camera.y = base_cam_pos[1]
         camera.z = base_cam_pos[2]
-        # ==========================================================
-        # MANEJO DE ARMAMENTO (CORREGIDO: ENFRIAMIENTO CONSTANTE)
-        # ==========================================================
+
         self.fire_timer -= time.dt
-
-        # EL CAMBIO CLAVE: El enfriamiento ahora es global, ocurre en cada frame automáticamente
         self.heat -= 40 * time.dt
-
-        # Si no estamos presionando el gatillo, el ritmo de disparo regresa a su estado base
-        if not held_keys['left mouse']:
-            self.current_fire_rate = lerp(self.current_fire_rate, self.base_fire_rate, time.dt * 3)
-
+        if not held_keys['left mouse']: self.current_fire_rate = lerp(self.current_fire_rate, self.base_fire_rate,
+                                                                      time.dt * 3)
         self.heat = clamp(self.heat, 0, self.max_heat)
 
-        # Control de activación de Sobrecalentamiento
         if self.heat >= self.max_heat and not self.overheated:
             self.overheated = True
             self.overheat_text.text = '¡SOBRECALENTAMIENTO! ESPERE...'
             self.heat_bar.color = color.red
 
-        # El arma debe enfriarse sustancialmente (hasta 20) antes de permitir disparar de nuevo
         if self.overheated and self.heat <= 20:
             self.overheated = False
             self.overheat_text.text = ''
             self.heat_bar.color = color.orange
 
-        # Lógica de ejecución del disparo
         if held_keys['left mouse'] and not self.overheated and self.fire_timer <= 0:
             true_aim_rotation = Vec3(self.base_pitch, self.rotation_y, self.rotation_z)
-
             DualLaser(self.position, true_aim_rotation, self.forward, self.right, self.up,
                       offset_x=self.right_laser_offset[0], offset_y=self.right_laser_offset[1],
                       offset_z=self.right_laser_offset[2])
@@ -598,25 +519,19 @@ class PlayerShip(Entity):
                       offset_z=self.left_laser_offset[2])
 
             self.shake_amount = clamp(self.shake_amount + 0.2, 0, 0.6)
-
-            #PORCENTAJE DE CALENTAMIENTO CAMBIAR SI SE QUIERE DISPARAR MÁS ANTES DE QUE SE CALIENTE
             self.heat += 7
-
             self.current_fire_rate = max(self.min_fire_rate, self.current_fire_rate - 0.05)
             self.fire_timer = self.current_fire_rate
 
         self.heat_bar.scale_x = self.heat / self.max_heat
 
     def input(self, key):
-        if self.is_dead:
-            return
-
+        if self.is_dead or self.is_cinematic: return
         if key == 'v':
             self.current_cam_index += 1
             if self.current_cam_index >= len(self.camera_modes):
                 self.current_cam_index = 0
             camera.position = self.camera_modes[self.current_cam_index]
-
         if key == 'a' and self.dash_timer <= 0 and self.boost_fuel >= 15:
             self.start_dash(-1)
         if key == 'd' and self.dash_timer <= 0 and self.boost_fuel >= 15:
