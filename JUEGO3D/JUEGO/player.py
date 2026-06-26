@@ -1,8 +1,12 @@
 from ursina import *
+from weapons import DualLaser
 import random
 import math
 
+
 class SpeedLine(Entity):
+    """Línea de velocidad individual en 2D que radia desde el centro hacia los bordes"""
+
     def __init__(self, **kwargs):
         super().__init__(parent=camera.ui, model='quad', color=color.rgba(200, 240, 255, 70), z=-1.1, **kwargs)
         self.angle = random.uniform(0, math.tau)
@@ -210,7 +214,6 @@ class PlayerShip(Entity):
 
         self.target_speed = 0
         self.current_speed = 0
-        # ¡Nuevas velocidades espaciales reales!
         self.normal_max_speed = 70
         self.boost_max_speed = 255
         self.acceleration = 1.5
@@ -232,7 +235,7 @@ class PlayerShip(Entity):
         self.dash_duration = 0.4
         self.dash_time_left = 0
         self.dash_direction = 0
-        self.dash_speed = 200  # Dash brutal
+        self.dash_speed = 200
         self.dash_roll = 0.0
         self.camera_dash_drag = 0.3
 
@@ -296,11 +299,6 @@ class PlayerShip(Entity):
         self.warning_text = Text(parent=self.hud_container, text='¡PELIGRO: NAVE INVERTIDA!', position=(0, 0.25),
                                  origin=(0, 0), color=color.red, scale=1.5, enabled=False)
 
-        # ==========================================
-        # REDISEÑO DEL HUD
-        # ==========================================
-
-        # 1. TACÓMETRO MASIVO
         tacho_center_x = -0.72
         tacho_center_y = -0.32
 
@@ -310,7 +308,6 @@ class PlayerShip(Entity):
                                    origin=(0, -0.5), position=(0, 0), rotation_z=-130, z=-0.1)
         Entity(parent=self.tacho_bg, model='circle', color=color.black, scale=0.15, z=-0.2)
 
-        # Números actualizados a la nueva velocidad
         Text(parent=self.hud_container, text='0', position=(tacho_center_x - 0.08, tacho_center_y - 0.08),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
         Text(parent=self.hud_container, text='1200', position=(tacho_center_x - 0.09, tacho_center_y + 0.02),
@@ -329,10 +326,8 @@ class PlayerShip(Entity):
         Text(parent=self.hud_container, text='KM/H', position=(tacho_center_x, tacho_center_y - 0.04), origin=(0, 0),
              scale=1.0, color=color.gray, z=-1)
 
-        # 2. BARRAS INFERIORES MINIMALISTAS
         self.bottom_hud = Entity(parent=self.hud_container, position=(0, -0.42))
 
-        # Escudo (Izquierda, se vacía hacia la izquierda)
         Text(parent=self.bottom_hud, text='ESCUDO', position=(-0.25, 0.02), scale=0.8, color=color.cyan,
              origin=(0.5, 0))
         self.shield_bar_bg = Entity(parent=self.bottom_hud, model='quad', color=color.rgba(10, 15, 20, 200),
@@ -340,7 +335,6 @@ class PlayerShip(Entity):
         self.shield_bar = Entity(parent=self.shield_bar_bg, model='quad', color=color.cyan, scale=(1, 1),
                                  origin=(0.5, 0), position=(0.5, 0))
 
-        # Turbo (Derecha, se vacía hacia la derecha)
         Text(parent=self.bottom_hud, text='TURBO', position=(0.25, 0.02), scale=0.8, color=color.orange,
              origin=(-0.5, 0))
         self.boost_bar_bg = Entity(parent=self.bottom_hud, model='quad', color=color.rgba(10, 15, 20, 200),
@@ -348,7 +342,6 @@ class PlayerShip(Entity):
         self.boost_bar = Entity(parent=self.boost_bar_bg, model='quad', color=color.orange, scale=(1, 1),
                                 origin=(-0.5, 0), position=(-0.5, 0))
 
-        # 3. RECALENTAMIENTO DINÁMICO (Estilo munición moderna)
         self.base_fire_rate = 0.45
         self.min_fire_rate = 0.08
         self.current_fire_rate = self.base_fire_rate
@@ -357,7 +350,6 @@ class PlayerShip(Entity):
         self.max_heat = 100
         self.overheated = False
 
-        # El widget está inhabilitado por defecto. Solo aparece al calentarse.
         self.heat_widget = Entity(parent=self.hud_container, position=(0.02, -0.02), enabled=False)
         self.heat_bar_bg = Entity(parent=self.heat_widget, model='quad', color=color.rgba(0, 0, 0, 150),
                                   scale=(0.06, 0.008), rotation_z=-20)
@@ -365,6 +357,12 @@ class PlayerShip(Entity):
                                origin=(-0.5, 0), position=(-0.5, 0))
         self.overheat_text = Text(parent=self.heat_widget, text='! ALERTA TERMICA !', color=color.red, scale=0.8,
                                   position=(0.04, -0.02), enabled=False)
+
+    def cracks_on_damage(self):
+        # Muestra una grieta aleatoria cuando recibe daño
+        disabled_cracks = [c for c in self.screen_cracks if not c.enabled]
+        if disabled_cracks:
+            random.choice(disabled_cracks).enabled = True
 
     def generate_trail(self):
         self.trail_timer -= time.dt
@@ -379,7 +377,7 @@ class PlayerShip(Entity):
                     p.animate_scale(Vec3(0, 0, 0), duration=duracion_vida, curve=curve.linear)
                     p.animate_color(color.rgba(0, 255, 255, 0), duration=duracion_vida, curve=curve.linear)
                     pos_final = p.position + (self.right * direccion_expulsion * random.uniform(1.2, 2.5)) + (
-                                self.forward * -1.5)
+                            self.forward * -1.5)
                     p.animate_position(pos_final, duration=duracion_vida, curve=curve.out_sine)
                     destroy(p, delay=duracion_vida + 0.05)
             self.trail_timer = 0.025
@@ -400,6 +398,7 @@ class PlayerShip(Entity):
         self.shield = max(0, self.shield)
         self.shake_amount = clamp(self.shake_amount + 0.4, 0, 0.9)
         self.damage_flash_overlay.alpha = 0.5
+        self.cracks_on_damage()
         if self.shield <= 0: self.die()
 
     def repair_shield(self, amount):
@@ -456,16 +455,16 @@ class PlayerShip(Entity):
         for b in self.hud_borders: b.alpha = 0
         for crack in self.screen_cracks: crack.enabled = False
         for t in self.thrusters: t.visible = True
-
         self.clear_persistent_ui()
 
     def clear_persistent_ui(self):
+        """SOLUCIÓN DEFINITIVA: Apaga la UI táctica pero NUNCA apaga su parent camera.ui"""
         if hasattr(self, 'scanner') and self.scanner:
             self.scanner.clear_markers()
             if hasattr(self.scanner, 'analyzing_text') and self.scanner.analyzing_text:
-                self.scanner.analyzing_text.enabled = False
+                self.scanner.analyzing_text.enabled = False  # Apaga el texto, no su parent
             if hasattr(self.scanner, 'scan_line') and self.scanner.scan_line:
-                self.scanner.scan_line.enabled = False
+                self.scanner.scan_line.enabled = False  # Apaga la línea, no su parent
 
     def update(self):
         if hasattr(self, 'scanner'): self.scanner.update()
@@ -528,7 +527,6 @@ class PlayerShip(Entity):
             camera.ui.x = 0
             camera.ui.y = 0
 
-        # Lógica visual y horizontal de las barras (se vacían hacia los lados)
         self.shield_bar.scale_x = self.shield / self.max_shield
         self.shield_bar.color = color.red if self.shield <= 15 else color.cyan
 
@@ -558,8 +556,13 @@ class PlayerShip(Entity):
 
         lerp_factor = self.acceleration if abs(self.target_speed) > abs(self.current_speed) else self.friction
         self.current_speed = lerp(self.current_speed, self.target_speed, time.dt * lerp_factor)
-        camera.fov = lerp(camera.fov, self.base_fov + (abs(self.current_speed) * 0.015),
-                          time.dt * 5)  # Ajuste visual para velocidades más altas
+
+        # ==========================================================
+        # SOLUCIÓN DEL FOV DINÁMICO ESCALADO AL RATIO REAL (0 a 1)
+        # ==========================================================
+        speed_ratio = clamp(abs(self.current_speed) / self.boost_max_speed, 0, 1)
+        target_fov = self.base_fov + (speed_ratio * 35.0)  # Expande hasta 35 grados el campo de visión
+        camera.fov = lerp(camera.fov, target_fov, time.dt * 5)
 
         self.position += self.forward * self.current_speed * time.dt
 
@@ -607,7 +610,6 @@ class PlayerShip(Entity):
 
         display_speed = int(abs(self.current_speed) * 20)
         self.speedometer.text = str(display_speed)
-        speed_ratio = clamp(abs(self.current_speed) / self.boost_max_speed, 0, 1)
         self.tacho_needle.rotation_z = -130 + (speed_ratio * 260)
 
         if speed_ratio > 0.8:
@@ -680,7 +682,12 @@ class PlayerShip(Entity):
 
         self.camera_pivot.world_rotation_z = 0
 
+        # ==========================================================
+        # SOLUCIÓN DE POSICIÓN DE CÁMARA: Desplazamiento dinámico en Z
+        # ==========================================================
         base_cam_pos = self.camera_modes[self.current_cam_index]
+        dynamic_z_back = speed_ratio * 4.0  # Se aleja de forma fluida hasta 4 unidades en turbo
+
         if self.shake_amount > 0:
             self.shake_amount -= time.dt * self.shake_decay
             self.shake_amount = max(0.0, self.shake_amount)
@@ -689,7 +696,9 @@ class PlayerShip(Entity):
         else:
             camera.x = base_cam_pos[0]
             camera.y = base_cam_pos[1]
-        camera.z = base_cam_pos[2]
+
+        # Fusionamos la posición base de la cámara activa - el desplazamiento dinámico por turbo
+        camera.z = base_cam_pos[2] - dynamic_z_back
 
         self.fire_timer -= time.dt
         self.heat -= 40 * time.dt

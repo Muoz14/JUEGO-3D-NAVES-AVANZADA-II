@@ -3,7 +3,7 @@ import random
 
 
 class Asteroid(Entity):
-    """Asteroide orgánico con protuberancias, variaciones de color, textura, materiales y fragmentación"""
+    """Asteroide orgánico: Carga pesada solo en Tier 1, fragmentos ligeros para cero lag"""
 
     def __init__(self, manager, pos, tier=1, material_data=None):
         self.manager = manager
@@ -11,25 +11,21 @@ class Asteroid(Entity):
 
         # --- SISTEMA DE MATERIALES (ADN del Asteroide) ---
         if material_data is None:
-            # Si nace por primera vez, elige un material al azar
             materials = [
-                {'name': 'HIERRO (Fe)', 'color': '#a14d26', 'desc': 'Uso Estructural'},  # Óxido
-                {'name': 'COBRE (Cu)', 'color': '#28795c', 'desc': 'Conductor Eléctrico'},  # Verde oscuro
-                {'name': 'TITANIO (Ti)', 'color': '#7b879c', 'desc': 'Blindaje Pesado'},  # Gris azulado
-                {'name': 'ORO (Au)', 'color': '#c4a627', 'desc': 'Microtecnología'},  # Dorado
-                {'name': 'URANIO (U)', 'color': '#599c1c', 'desc': 'Núcleo Combustible'}  # Verde radiactivo
+                {'name': 'HIERRO (Fe)', 'color': '#a14d26', 'desc': 'Uso Estructural'},
+                {'name': 'COBRE (Cu)', 'color': '#28795c', 'desc': 'Conductor Eléctrico'},
+                {'name': 'TITANIO (Ti)', 'color': '#7b879c', 'desc': 'Blindaje Pesado'},
+                {'name': 'ORO (Au)', 'color': '#c4a627', 'desc': 'Microtecnología'},
+                {'name': 'URANIO (U)', 'color': '#599c1c', 'desc': 'Núcleo Combustible'}
             ]
             self.mat_data = random.choice(materials)
         else:
-            # Si es un fragmento, hereda la información de la roca padre
             self.mat_data = material_data
 
-        # Variables para que el escáner (MaterialPopup) pueda leerlas
         self.material_name = self.mat_data['name']
         self.material_desc = self.mat_data['desc']
         hex_color = self.mat_data['color']
 
-        # Variación aleatoria RGB para que no haya dos rocas del mismo material idénticas
         c_rgb = color.hex(hex_color)
         c_final = color.rgb(
             clamp(c_rgb.r * random.uniform(0.8, 1.2), 0, 255),
@@ -37,99 +33,77 @@ class Asteroid(Entity):
             clamp(c_rgb.b * random.uniform(0.8, 1.2), 0, 255)
         )
 
-        # Definir tamaño base según el nivel
-        if tier == 1:
-            base_size = random.uniform(8, 12)
-        elif tier == 2:
-            base_size = random.uniform(4, 6)
-        elif tier == 3:
-            base_size = random.uniform(2, 3)
-        else:
-            base_size = random.uniform(0.8, 1.5)
+        if tier == 1: base_size = random.uniform(8, 12)
+        elif tier == 2: base_size = random.uniform(4, 6)
+        elif tier == 3: base_size = random.uniform(2, 3)
+        else: base_size = random.uniform(0.8, 1.5)
 
-        # Deformación inicial para que no sean esferas perfectas
-        deformed_scale = Vec3(
-            base_size,
-            base_size * random.uniform(0.7, 1.2),
-            base_size * random.uniform(0.7, 1.2)
-        )
+        deformed_scale = Vec3(base_size, base_size * random.uniform(0.7, 1.2), base_size * random.uniform(0.7, 1.2))
 
         super().__init__(
             model='sphere',
             texture='noise',
             color=c_final,
             scale=deformed_scale,
-            position=pos,
-            collider='sphere'
+            position=pos
         )
         self.is_asteroid = True
 
-        # Protuberancias físicas (bultos y cráteres)
-        if tier < 4:
+        # LA MAGIA ANTI-LAG:
+        # Solo calculamos y fusionamos mallas si es una roca gigante original (Tier 1)
+        if tier == 1:
             for _ in range(random.randint(3, 7)):
                 offset_dir = Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)).normalized()
                 Entity(
                     parent=self,
                     model='sphere',
                     texture='noise',
-                    color=c_final * random.uniform(0.6, 1.1),
+                    color=color.white,
                     scale=random.uniform(0.2, 0.55),
                     position=offset_dir * 0.45
                 )
+            self.combine()
 
-        # Movimiento 3D libre
-        self.velocity = Vec3(random.uniform(-1, 1), random.uniform(-1, 1),
-                             random.uniform(-1, 1)).normalized() * random.uniform(2, 6)
+        self.collider = 'sphere'
+
+        self.velocity = Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)).normalized() * random.uniform(2, 6)
         self.rotation_speed = Vec3(random.uniform(-15, 15), random.uniform(-15, 15), random.uniform(-15, 15))
 
     def update(self):
         self.position += self.velocity * time.dt
         self.rotation += self.rotation_speed * time.dt
 
-        # Rebote suave entre asteroides
         hit = self.intersects(ignore=(self,))
         if hit.hit and hasattr(hit.entity, 'is_asteroid'):
             bounce_dir = (self.position - hit.entity.position).normalized()
             self.velocity = bounce_dir * (self.velocity.length() * 0.8)
             self.position += bounce_dir * self.scale_x * 0.05
 
-            # Reciclaje si se alejan demasiado (Object Pooling)
-        if not self.manager.player: return
+        if not getattr(self.manager, 'player', None): return
         dist = distance(self.position, self.manager.player.position)
 
         if dist > self.manager.despawn_radius:
             if self.tier == 1:
-                spawn_dir = (self.manager.player.forward + Vec3(random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8),
-                                                                random.uniform(-0.8, 0.8))).normalized()
+                spawn_dir = (self.manager.player.forward + Vec3(random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8), random.uniform(-0.8, 0.8))).normalized()
                 self.position = self.manager.player.position + (spawn_dir * (self.manager.despawn_radius - 20))
             else:
                 if self in self.manager.asteroids: self.manager.asteroids.remove(self)
                 destroy(self)
 
     def split(self):
-        """Lógica de división heredando los materiales"""
-        if self.tier == 1:
-            pieces = 2; next_tier = 2
-        elif self.tier == 2:
-            pieces = 3; next_tier = 3
-        elif self.tier == 3:
-            pieces = 4; next_tier = 4
-        else:
-            pieces = 0
+        if self.tier == 1: pieces = 2; next_tier = 2
+        elif self.tier == 2: pieces = 3; next_tier = 3
+        elif self.tier == 3: pieces = 4; next_tier = 4
+        else: pieces = 0
 
         for _ in range(pieces):
-            offset = Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)).normalized() * (
-                        self.scale_x * 0.4)
-
-            # Pasamos self.mat_data para que los hijos sean del mismo material que el padre
+            offset = Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)).normalized() * (self.scale_x * 0.4)
             new_ast = Asteroid(self.manager, self.position + offset, tier=next_tier, material_data=self.mat_data)
-
             new_ast.velocity = self.velocity + (offset.normalized() * random.uniform(1.5, 4.0))
             self.manager.asteroids.append(new_ast)
 
         if self in self.manager.asteroids: self.manager.asteroids.remove(self)
         destroy(self)
-
 
 class AsteroidManager(Entity):
     def __init__(self, player, count=60, radius=300, despawn_radius=500, **kwargs):

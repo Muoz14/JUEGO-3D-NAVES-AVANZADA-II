@@ -10,7 +10,7 @@ class IntroCinematic(Entity):
         super().__init__(ignore_paused=True, **kwargs)
         self.player = player
         self.is_playing = False
-        self.session_id = 0  # NUEVO: Identificador único por cada vez que juegas
+        self.session_id = 0  # Identificador único por cada vez que juegas
         self.camera_shake = 0.0
         self.base_cam_pos = Vec3(0, 0, 0)
 
@@ -40,7 +40,7 @@ class IntroCinematic(Entity):
                                    scale=(0.8, 1.1, 0.8), unlit=True)
 
     def play(self):
-        self.session_id += 1  # NUEVO: Al iniciar, creamos un nuevo ID
+        self.session_id += 1  # Al iniciar, creamos un nuevo ID
         sid = self.session_id  # Guardamos el ID de esta partida en específico
 
         self.is_playing = True
@@ -55,7 +55,7 @@ class IntroCinematic(Entity):
         self.dummy_ship.enabled = True
         self.portal.enabled = True
 
-        # Pasamos el 'sid' a todas las llamadas futuras
+        # Pasamos el 'sid' a todas las llamadas futuras para validar la sesión
         self.execute_shot_1(sid)
         invoke(self.execute_shot_2, sid, delay=2.8)
         invoke(self.execute_shot_3, sid, delay=6.0)
@@ -96,7 +96,6 @@ class IntroCinematic(Entity):
         camera.position = self.base_cam_pos
 
         # Miramos hacia la nave, pero le metemos una inclinación de -15 grados (Dutch Angle)
-        # Esto hace que el plano se vea super dinámico y de acción.
         camera.look_at(self.dummy_ship.position)
         camera.rotation_z = -15
         camera.fov = 65
@@ -126,16 +125,13 @@ class IntroCinematic(Entity):
         """PLANO 4: Llegada y frenazo - Vista frontal dramática con portal distante"""
         if sid != self.session_id or not self.is_playing: return
 
-        # Aseguramos que el portal esté activo, pero lo mandamos mucho más lejos
         self.portal.enabled = True
-        self.portal.position = (0, 0, -150)  # Originalmente estaba en -90
+        self.portal.position = (0, 0, -150)
         self.portal.scale = Vec3(35, 0.01, 35)
-        self.portal_inner.color = color.white  # Aseguramos su color original por si acaso
+        self.portal_inner.color = color.white
 
-        # La nave arranca su frenazo justo saliendo del portal lejano
-        self.dummy_ship.position = (0, 0, -145)  # Originalmente estaba en -85
+        self.dummy_ship.position = (0, 0, -145)
 
-        # CÁMARA FRONTAL: Ubicada delante del punto de llegada, estable y sin giros locos.
         self.base_cam_pos = Vec3(0, 2.5, 20)
         camera.position = self.base_cam_pos
         camera.rotation = (8, 180, 0)
@@ -143,7 +139,6 @@ class IntroCinematic(Entity):
 
         self.subtitle.text = "[SISTEMA]: Destino alcanzado. Aplicando contrapeso y frenos magnéticos."
 
-        # El frenazo se sentirá más rápido porque recorre más distancia en el mismo tiempo
         self.dummy_ship.animate_position((0, 0, 0), duration=1.5, curve=curve.out_expo)
 
         invoke(self.slam_brakes, sid, delay=1.2)
@@ -151,7 +146,6 @@ class IntroCinematic(Entity):
     def slam_brakes(self, sid):
         if sid != self.session_id or not self.is_playing: return
 
-        # Temblor original y el cierre clásico del portal
         self.camera_shake = 1.9
         self.portal.animate_scale(Vec3(0, 0.01, 0), duration=0.4, curve=curve.in_back)
 
@@ -206,7 +200,7 @@ class IntroCinematic(Entity):
 
     def stop_and_clear(self):
         """Bloquea los invokes y apaga por completo las capas UI para no contaminar el menú"""
-        self.session_id += 1  # NUEVO: Al sumar 1, todos los invokes pendientes de la partida anterior mueren automáticamente.
+        self.session_id += 1  # Al sumar 1, todos los invokes pendientes de la sesión anterior mueren automáticamente.
 
         self.is_playing = False
         self.dummy_ship.enabled = False

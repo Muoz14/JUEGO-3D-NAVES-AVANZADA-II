@@ -3,40 +3,30 @@ import random
 
 
 class ExplosionParticle(Entity):
-    """Partícula individual que sale disparada de manera tridimensional al estallar un asteroide"""
+    """Partículas de altísimo rendimiento: Animación delegada al backend de C++, sin bucle Update"""
 
     def __init__(self, pos, **kwargs):
         super().__init__(
             model='sphere',
-            # Selector aleatorio de colores incandescentes y restos de roca gris
             color=random.choice([color.orange, color.yellow, color.rgb(255, 100, 0), color.dark_gray]),
             scale=random.uniform(0.15, 0.45),
             position=pos,
             **kwargs
         )
-        # Generamos un vector de dirección 3D completamente aleatorio y lo normalizamos
-        self.direction = Vec3(
-            random.uniform(-1, 1),
-            random.uniform(-1, 1),
-            random.uniform(-1, 1)
-        ).normalized()
 
-        # Parámetros físicos individuales de la partícula
-        self.speed = random.uniform(15, 45)
-        self.lifetime = random.uniform(0.2, 0.5)
-        self.initial_lifetime = self.lifetime
+        direction = Vec3(random.uniform(-1, 1), random.uniform(-1, 1), random.uniform(-1, 1)).normalized()
+        speed = random.uniform(15, 45)
+        lifetime = random.uniform(0.2, 0.5)
 
-    def update(self):
-        # Desplazamiento en el espacio según su dirección y velocidad
-        self.position += self.direction * self.speed * time.dt
+        # Calculamos dónde terminará la partícula
+        target_pos = self.position + (direction * speed * lifetime)
 
-        # Reducción lineal de escala simulando desintegración térmica
-        self.scale -= Vec3(1, 1, 1) * (time.dt / self.initial_lifetime) * 0.4
+        # Delegamos la animación directamente al motor interno (Cero lag de Python)
+        self.animate_position(target_pos, duration=lifetime, curve=curve.out_expo)
+        self.animate_scale(Vec3(0, 0, 0), duration=lifetime, curve=curve.out_expo)
 
-        # Control del ciclo de vida
-        self.lifetime -= time.dt
-        if self.lifetime <= 0 or self.scale_x <= 0:
-            destroy(self)
+        # Se autodestruye al terminar
+        destroy(self, delay=lifetime)
 
 
 class DualLaser(Entity):

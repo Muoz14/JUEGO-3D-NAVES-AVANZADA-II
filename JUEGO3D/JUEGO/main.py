@@ -71,7 +71,7 @@ class GameApp:
         window.size = (1600, 900)
         window.center_on_screen()
         window.color = color.black
-        window.title = "Nebula Shift"
+        window.title = "Astra 3D"
         window.fps_counter.enabled = True
         window.exit_button.visible = False
         window.exit_button.enabled = False
@@ -109,6 +109,7 @@ class GameApp:
         self.space_dust.enabled = True
         self.player.reset_ship()
 
+        # Despertamos de forma asíncrona la secuencia cinematográfica multicámara
         self.intro_cinematic.play()
         mouse.locked = True
 
