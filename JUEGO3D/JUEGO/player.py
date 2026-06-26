@@ -1,8 +1,6 @@
 from ursina import *
-from weapons import DualLaser
 import random
 import math
-
 
 class SpeedLine(Entity):
     def __init__(self, **kwargs):
@@ -27,14 +25,70 @@ class SpeedLine(Entity):
         if self.distance > 1.2 or self.alpha <= 0: destroy(self)
 
 
+class MaterialPopup(Entity):
+    """Recuadro de información UI flotante (Estilo No Man's Sky)"""
+
+    def __init__(self, target_asteroid, **kwargs):
+        super().__init__(parent=camera.ui, z=-15, ignore_paused=True, **kwargs)
+        self.target = target_asteroid
+
+        self.bg = Entity(parent=self, model='quad', color=color.rgba(10, 15, 25, 230), scale=(0.4, 0.16),
+                         position=(0.2, -0.08))
+
+        Entity(parent=self.bg, model='quad', color=color.cyan, scale=(0.02, 1), position=(-0.5, 0), z=-0.01)
+        Entity(parent=self.bg, model='quad', color=color.cyan, scale=(0.2, 0.05), position=(0.4, 0.475), z=-0.01)
+
+        Text(parent=self, text='[ ANÁLISIS MINERAL ]', position=(0.02, -0.02), scale=1.2, color=color.cyan, z=-1)
+        Text(parent=self, text=self.target.material_name, position=(0.02, -0.06), scale=1.8, color=color.white, z=-1)
+        Text(parent=self, text=f"Tipo: {self.target.material_desc}", position=(0.02, -0.11), scale=1.1,
+             color=color.light_gray, z=-1)
+
+        self.dist_text = Text(parent=self, text='0m', position=(0.32, -0.02), scale=1.2, color=color.orange, z=-1)
+
+        self.scale = 0
+        self.animate_scale(1, duration=0.2, curve=curve.out_back)
+        self.is_fading = False
+
+    def fade_and_destroy(self):
+        if self.is_fading: return
+        self.is_fading = True
+        self.animate_scale(0, duration=0.15)
+        destroy(self, delay=0.2)
+
+    def update(self):
+        if application.paused:
+            self.visible = False
+            return
+
+        if not self.target or self.target not in scene.entities:
+            self.fade_and_destroy()
+            return
+
+        dist = distance(self.target.position, camera.world_position)
+        if dist > 500:
+            self.fade_and_destroy()
+            return
+
+        self.dist_text.text = f"{int(dist)}m"
+
+        if (self.target.position - camera.world_position).dot(camera.forward) < 0:
+            self.visible = False
+        else:
+            self.visible = True
+
+        pos_2d = self.target.screen_position
+        self.position = pos_2d + Vec2(0.06, 0.04)
+
+
 class TacticalScanner:
     def __init__(self, player):
         self.player = player
         self.active = False
-        self.scan_radius = 250
-        self.max_targets = 6
+        self.scan_radius = 500
+        self.max_targets = 15
         self.markers = []
         self.active_timer = 0
+        self.current_popup = None
 
         self.scan_line = Entity(parent=camera.ui, model='quad', scale=(2.5, 0.03), color=color.cyan, z=-3,
                                 enabled=False)
@@ -48,7 +102,7 @@ class TacticalScanner:
             self.active = not self.active
 
         if self.active:
-            self.active_timer = 4.0
+            self.active_timer = 6.0
             self.play_scan_animation()
             self.scan_environment()
         else:
@@ -86,16 +140,30 @@ class TacticalScanner:
             Entity(parent=marker, model='quad', scale=(0.05, 2.0), position=(1.0, 0, 0), color=c, unlit=True)
             Entity(parent=marker, model='quad', scale=(0.05, 2.0), position=(-1.0, 0, 0), color=c, unlit=True)
 
-            marker.text_dist = Text(parent=marker, text=f'{int(dist)}m', position=(0, -1.4, 0), origin=(0, 0), scale=4,
+            marker.text_dist = Text(parent=marker, text=f'{int(dist)}m', position=(0, -1.8, 0), origin=(0, 0), scale=9,
                                     color=color.cyan)
             self.markers.append(marker)
 
     def update(self):
         if not self.active: return
+
         self.active_timer -= time.dt
         if self.active_timer <= 0:
             self.toggle(force_off=True)
             return
+
+        hit_info = raycast(camera.world_position, camera.forward, distance=self.scan_radius, ignore=[self.player])
+
+        if hit_info.hit and hasattr(hit_info.entity, 'is_asteroid'):
+            target = hit_info.entity
+            if getattr(self.current_popup, 'target', None) != target:
+                if self.current_popup:
+                    self.current_popup.fade_and_destroy()
+                self.current_popup = MaterialPopup(target)
+        else:
+            if self.current_popup:
+                self.current_popup.fade_and_destroy()
+                self.current_popup = None
 
         for marker in self.markers[:]:
             if not marker.parent or marker.parent not in scene.entities or not marker.parent.enabled:
@@ -118,6 +186,10 @@ class TacticalScanner:
             destroy(marker, delay=0.2)
         self.markers.clear()
 
+        if getattr(self, 'current_popup', None):
+            self.current_popup.fade_and_destroy()
+            self.current_popup = None
+
 
 class PlayerShip(Entity):
     def __init__(self, game_over_menu=None, **kwargs):
@@ -138,8 +210,9 @@ class PlayerShip(Entity):
 
         self.target_speed = 0
         self.current_speed = 0
+        # ¡Nuevas velocidades espaciales reales!
         self.normal_max_speed = 70
-        self.boost_max_speed = 220
+        self.boost_max_speed = 255
         self.acceleration = 1.5
         self.friction = 0.8
         self.mouse_sensitivity = 60
@@ -159,7 +232,7 @@ class PlayerShip(Entity):
         self.dash_duration = 0.4
         self.dash_time_left = 0
         self.dash_direction = 0
-        self.dash_speed = 180
+        self.dash_speed = 200  # Dash brutal
         self.dash_roll = 0.0
         self.camera_dash_drag = 0.3
 
@@ -223,6 +296,11 @@ class PlayerShip(Entity):
         self.warning_text = Text(parent=self.hud_container, text='¡PELIGRO: NAVE INVERTIDA!', position=(0, 0.25),
                                  origin=(0, 0), color=color.red, scale=1.5, enabled=False)
 
+        # ==========================================
+        # REDISEÑO DEL HUD
+        # ==========================================
+
+        # 1. TACÓMETRO MASIVO
         tacho_center_x = -0.72
         tacho_center_y = -0.32
 
@@ -232,17 +310,18 @@ class PlayerShip(Entity):
                                    origin=(0, -0.5), position=(0, 0), rotation_z=-130, z=-0.1)
         Entity(parent=self.tacho_bg, model='circle', color=color.black, scale=0.15, z=-0.2)
 
+        # Números actualizados a la nueva velocidad
         Text(parent=self.hud_container, text='0', position=(tacho_center_x - 0.08, tacho_center_y - 0.08),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=self.hud_container, text='45', position=(tacho_center_x - 0.09, tacho_center_y + 0.02),
+        Text(parent=self.hud_container, text='1200', position=(tacho_center_x - 0.09, tacho_center_y + 0.02),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=self.hud_container, text='90', position=(tacho_center_x - 0.04, tacho_center_y + 0.08),
+        Text(parent=self.hud_container, text='2200', position=(tacho_center_x - 0.04, tacho_center_y + 0.08),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=self.hud_container, text='135', position=(tacho_center_x + 0.04, tacho_center_y + 0.08),
+        Text(parent=self.hud_container, text='3200', position=(tacho_center_x + 0.04, tacho_center_y + 0.08),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=self.hud_container, text='180', position=(tacho_center_x + 0.09, tacho_center_y + 0.02),
+        Text(parent=self.hud_container, text='4200', position=(tacho_center_x + 0.09, tacho_center_y + 0.02),
              origin=(0, 0), scale=0.9, color=color.light_gray, z=-1)
-        Text(parent=self.hud_container, text='220', position=(tacho_center_x + 0.08, tacho_center_y - 0.08),
+        Text(parent=self.hud_container, text='5000', position=(tacho_center_x + 0.08, tacho_center_y - 0.08),
              origin=(0, 0), scale=0.9, color=color.red, z=-1)
 
         self.speedometer = Text(parent=self.hud_container, text='0', position=(tacho_center_x, tacho_center_y + 0.02),
@@ -250,20 +329,26 @@ class PlayerShip(Entity):
         Text(parent=self.hud_container, text='KM/H', position=(tacho_center_x, tacho_center_y - 0.04), origin=(0, 0),
              scale=1.0, color=color.gray, z=-1)
 
-        self.boost_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.rgba(30, 35, 40, 250),
-                                   scale=(0.02, 0.18), position=(tacho_center_x + 0.16, tacho_center_y), z=1)
-        self.boost_bar = Entity(parent=self.boost_bar_bg, model='quad', color=color.cyan, scale=(1, 1),
-                                position=(0, -0.5), origin=(0, -0.5), z=-1)
-        Text(parent=self.hud_container, text='TURBO', position=(tacho_center_x + 0.16, tacho_center_y - 0.11),
-             origin=(0, 0), scale=0.8, color=color.white, z=-1)
+        # 2. BARRAS INFERIORES MINIMALISTAS
+        self.bottom_hud = Entity(parent=self.hud_container, position=(0, -0.42))
 
-        self.shield_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.rgba(30, 35, 40, 250),
-                                    scale=(0.02, 0.18), position=(tacho_center_x + 0.22, tacho_center_y), z=1)
-        self.shield_bar = Entity(parent=self.shield_bar_bg, model='quad', color=color.blue, scale=(1, 1),
-                                 position=(0, -0.5), origin=(0, -0.5), z=-1)
-        Text(parent=self.hud_container, text='ESCUDO', position=(tacho_center_x + 0.22, tacho_center_y - 0.11),
-             origin=(0, 0), scale=0.7, color=color.white, z=-1)
+        # Escudo (Izquierda, se vacía hacia la izquierda)
+        Text(parent=self.bottom_hud, text='ESCUDO', position=(-0.25, 0.02), scale=0.8, color=color.cyan,
+             origin=(0.5, 0))
+        self.shield_bar_bg = Entity(parent=self.bottom_hud, model='quad', color=color.rgba(10, 15, 20, 200),
+                                    scale=(0.22, 0.01), position=(-0.14, 0))
+        self.shield_bar = Entity(parent=self.shield_bar_bg, model='quad', color=color.cyan, scale=(1, 1),
+                                 origin=(0.5, 0), position=(0.5, 0))
 
+        # Turbo (Derecha, se vacía hacia la derecha)
+        Text(parent=self.bottom_hud, text='TURBO', position=(0.25, 0.02), scale=0.8, color=color.orange,
+             origin=(-0.5, 0))
+        self.boost_bar_bg = Entity(parent=self.bottom_hud, model='quad', color=color.rgba(10, 15, 20, 200),
+                                   scale=(0.22, 0.01), position=(0.14, 0))
+        self.boost_bar = Entity(parent=self.boost_bar_bg, model='quad', color=color.orange, scale=(1, 1),
+                                origin=(-0.5, 0), position=(-0.5, 0))
+
+        # 3. RECALENTAMIENTO DINÁMICO (Estilo munición moderna)
         self.base_fire_rate = 0.45
         self.min_fire_rate = 0.08
         self.current_fire_rate = self.base_fire_rate
@@ -272,12 +357,14 @@ class PlayerShip(Entity):
         self.max_heat = 100
         self.overheated = False
 
-        self.heat_bar_bg = Entity(parent=self.hud_container, model='quad', color=color.dark_gray, scale=(0.3, 0.02),
-                                  position=(0, -0.45), z=1)
+        # El widget está inhabilitado por defecto. Solo aparece al calentarse.
+        self.heat_widget = Entity(parent=self.hud_container, position=(0.02, -0.02), enabled=False)
+        self.heat_bar_bg = Entity(parent=self.heat_widget, model='quad', color=color.rgba(0, 0, 0, 150),
+                                  scale=(0.06, 0.008), rotation_z=-20)
         self.heat_bar = Entity(parent=self.heat_bar_bg, model='quad', color=color.orange, scale=(0, 1),
-                               position=(-0.5, 0), origin=(-0.5, 0), z=-1)
-        self.overheat_text = Text(parent=self.hud_container, text='', origin=(0, 0), position=(0, -0.35),
-                                  color=color.red, scale=1.5, z=-1)
+                               origin=(-0.5, 0), position=(-0.5, 0))
+        self.overheat_text = Text(parent=self.heat_widget, text='! ALERTA TERMICA !', color=color.red, scale=0.8,
+                                  position=(0.04, -0.02), enabled=False)
 
     def generate_trail(self):
         self.trail_timer -= time.dt
@@ -353,7 +440,8 @@ class PlayerShip(Entity):
         self.collider = 'box'
         self.dash_timer = 0
         self.is_dashing = False
-        self.overheat_text.text = ''
+        self.heat_widget.enabled = False
+        self.overheat_text.enabled = False
         self.heat_bar.color = color.orange
         self.tacho_needle.color = color.hex('#ff3333')
         self.speedometer.color = color.white
@@ -372,7 +460,6 @@ class PlayerShip(Entity):
         self.clear_persistent_ui()
 
     def clear_persistent_ui(self):
-        """CORRECCIÓN: Solo apagamos el texto/líneas de la táctica, SIN tocar sus 'parents'"""
         if hasattr(self, 'scanner') and self.scanner:
             self.scanner.clear_markers()
             if hasattr(self.scanner, 'analyzing_text') and self.scanner.analyzing_text:
@@ -399,17 +486,15 @@ class PlayerShip(Entity):
                 t.color = color.rgba(0, 180, 255, 120)
             return
 
-            # Choque físico y fragmentación
         hit_info = self.intersects()
         if hit_info.hit and hasattr(hit_info.entity, 'is_asteroid'):
             from weapons import ExplosionParticle
             for _ in range(25):
-                 ExplosionParticle(pos=hit_info.entity.position)
+                ExplosionParticle(pos=hit_info.entity.position)
 
-            # FÍSICA CORREGIDA: Rebote cortito y rechazo suave
             rebound_dir = (self.position - hit_info.entity.position).normalized()
-            self.position += rebound_dir * 1.5  # Empujón ligero (antes era 5)
-            self.current_speed = -self.current_speed * 0.15  # Freno leve, no te manda a volar hacia atrás
+            self.position += rebound_dir * 1.5
+            self.current_speed = -self.current_speed * 0.15
 
             hit_info.entity.split()
             self.take_damage(30)
@@ -443,8 +528,9 @@ class PlayerShip(Entity):
             camera.ui.x = 0
             camera.ui.y = 0
 
-        self.shield_bar.scale_y = self.shield / self.max_shield
-        self.shield_bar.color = color.red if self.shield <= 15 else color.blue
+        # Lógica visual y horizontal de las barras (se vacían hacia los lados)
+        self.shield_bar.scale_x = self.shield / self.max_shield
+        self.shield_bar.color = color.red if self.shield <= 15 else color.cyan
 
         if self.up.y < -0.1:
             self.warning_text.enabled = True
@@ -472,8 +558,10 @@ class PlayerShip(Entity):
 
         lerp_factor = self.acceleration if abs(self.target_speed) > abs(self.current_speed) else self.friction
         self.current_speed = lerp(self.current_speed, self.target_speed, time.dt * lerp_factor)
+        camera.fov = lerp(camera.fov, self.base_fov + (abs(self.current_speed) * 0.015),
+                          time.dt * 5)  # Ajuste visual para velocidades más altas
+
         self.position += self.forward * self.current_speed * time.dt
-        camera.fov = lerp(camera.fov, self.base_fov + (abs(self.current_speed) * 0.35), time.dt * 5)
 
         if is_boosting:
             target_scale_z = random.uniform(3.5, 4.8)
@@ -515,9 +603,9 @@ class PlayerShip(Entity):
             else:
                 self.boost_fuel += 30 * time.dt
         self.boost_fuel = clamp(self.boost_fuel, 0, self.max_boost)
-        self.boost_bar.scale_y = self.boost_fuel / self.max_boost
+        self.boost_bar.scale_x = self.boost_fuel / self.max_boost
 
-        display_speed = int(abs(self.current_speed))
+        display_speed = int(abs(self.current_speed) * 20)
         self.speedometer.text = str(display_speed)
         speed_ratio = clamp(abs(self.current_speed) / self.boost_max_speed, 0, 1)
         self.tacho_needle.rotation_z = -130 + (speed_ratio * 260)
@@ -609,18 +697,30 @@ class PlayerShip(Entity):
                                                                       time.dt * 3)
         self.heat = clamp(self.heat, 0, self.max_heat)
 
+        # Lógica de barra dinámica que desaparece
+        if self.heat > 1:
+            self.heat_widget.enabled = True
+            alpha_val = clamp(self.heat / 20, 0, 1)  # Efecto suave al desaparecer
+            self.heat_bar.color = color.rgba(255, 165, 0, int(255 * alpha_val)) if not self.overheated else color.rgba(
+                255, 50, 50, int(255 * alpha_val))
+            self.heat_bar_bg.color = color.rgba(0, 0, 0, int(150 * alpha_val))
+        else:
+            self.heat_widget.enabled = False
+
+        self.heat_bar.scale_x = self.heat / self.max_heat
+
         if self.heat >= self.max_heat and not self.overheated:
             self.overheated = True
-            self.overheat_text.text = '¡SOBRECALENTAMIENTO! ESPERE...'
-            self.heat_bar.color = color.red
+            self.overheat_text.enabled = True
 
         if self.overheated and self.heat <= 20:
             self.overheated = False
-            self.overheat_text.text = ''
-            self.heat_bar.color = color.orange
+            self.overheat_text.enabled = False
 
         if held_keys['left mouse'] and not self.overheated and self.fire_timer <= 0:
             true_aim_rotation = Vec3(self.base_pitch, self.rotation_y, self.rotation_z)
+
+            from weapons import DualLaser
             DualLaser(self.position, true_aim_rotation, self.forward, self.right, self.up,
                       offset_x=self.right_laser_offset[0], offset_y=self.right_laser_offset[1],
                       offset_z=self.right_laser_offset[2])
