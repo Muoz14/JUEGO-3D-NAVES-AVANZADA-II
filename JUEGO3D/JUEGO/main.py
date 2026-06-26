@@ -76,7 +76,8 @@ class GameApp:
         window.exit_button.visible = False
         window.exit_button.enabled = False
 
-        Sky(color=color.dark_gray)
+        # Guardamos el cielo en una variable de clase para manipularlo dinámicamente
+        self.sky = Sky(color=color.black)
 
         self.game_over_menu = GameOverMenu(restart_func=self.restart_game)
         self.pause_menu = PauseMenu(game_instance=self)
@@ -88,7 +89,7 @@ class GameApp:
         self.space_grid.grid_plane.enabled = False
 
         self.player = PlayerShip(game_over_menu=self.game_over_menu)
-        self.environment = AsteroidManager(count=150, radius=350)
+        self.environment = AsteroidManager(player=self.player, count=60, radius=350)
         self.space_dust = SpaceDustManager(player=self.player, count=300, radius=60)
 
         self.intro_cinematic = IntroCinematic(self.player)
@@ -100,30 +101,48 @@ class GameApp:
         mouse.locked = False
 
     def start_actual_game(self):
+        # Conmutamos el fondo al gris oscuro espacial de la simulación activa
+        if self.sky:
+            self.sky.color = color.dark_gray
+
         self.space_grid.grid_plane.enabled = True
         self.space_dust.enabled = True
         self.player.reset_ship()
 
-        # Despertamos de forma asíncrona la secuencia cinematográfica multicámara
         self.intro_cinematic.play()
         mouse.locked = True
 
     def return_to_main_menu(self):
+        # Detención inmediata de todos los hilos e invokes en ejecución de la cinemática
         self.intro_cinematic.stop_and_clear()
+
         self.player.enabled = False
+        self.player.clear_persistent_ui()
         self.player.hud_container.disable()
+
+        # Desconexión manual de seguridad para el sistema de escaneo
+        if hasattr(self.player, 'scanner') and self.player.scanner:
+            self.player.scanner.active = False
+            self.player.scanner.clear_markers()
+
         self.space_grid.grid_plane.enabled = False
         self.space_dust.enabled = False
         self.environment.clear_and_respawn()
 
+        # Reseteamos la posición y FOV estándar de la cámara para el visor de menú
         camera.parent = scene
         camera.position = (0, 0, 0)
         camera.rotation = (0, 0, 0)
         camera.fov = 90
 
+        # Devolvemos el cielo al color negro puro sobrio del inicio
+        if self.sky:
+            self.sky.color = color.black
+
         self.main_menu.enable()
         self.main_menu.fade_overlay.color = color.rgba(0, 0, 0, 0)
         self.main_menu.reset_menu_state()
+        self.main_menu.bg_container.rotation_y = 0
         mouse.locked = False
 
     def restart_game(self):

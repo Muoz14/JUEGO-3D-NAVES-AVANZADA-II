@@ -46,33 +46,36 @@ class DualLaser(Entity):
                  **kwargs):
         super().__init__(
             model='cube',
-            color=color.red,
-            scale=(0.1, 0.1, 4),
+            color=color.red,       # Regresamos al rojo puro original
+            unlit=True,            # ¡Clave! Evita que las luces del juego lo vuelvan blanco o gris
+            scale=(0.2, 0.2, 2),   # Mantenemos el tamaño masivo que le pusimos
             collider='box',
             **kwargs
         )
 
         self.position = ship_position + (ship_right * offset_x) + (ship_up * offset_y) + (ship_forward * offset_z)
         self.rotation = ship_rotation
-        self.speed = 300
-        self.lifetime = 1.5
+        self.speed = 120
+        self.lifetime = 2.0
 
         destroy(self, delay=self.lifetime)
 
     def update(self):
-        self.position += self.forward * self.speed * time.dt
-        hit_info = self.intersects()
+        # Calculamos cuánto va a avanzar el láser en este exacto frame
+        distancia_avance = self.speed * time.dt
 
-        if hit_info.hit:
-            if hasattr(hit_info.entity, 'is_asteroid'):
-                # Guardamos la posición del asteroide antes de destruirlo
-                impact_position = hit_info.entity.position
+        # RAYCASTING: Disparamos un rayo invisible hacia adelante para ver si golpearemos algo
+        hit_info = raycast(self.position, self.forward, distance=distancia_avance + (self.scale_z / 2), ignore=(self,))
 
-                # CREAR LA EXPLOSIÓN: Instanciamos un grupo de partículas en el punto de impacto
-                # Puedes ajustar el rango (ej. de 15 a 25) según qué tan densa quieras la explosión
-                for _ in range(random.randint(15, 25)):
-                    ExplosionParticle(pos=impact_position)
+        if hit_info.hit and hasattr(hit_info.entity, 'is_asteroid'):
+            impact_position = hit_info.entity.position
 
-                # Destruimos el asteroide y el láser
-                destroy(hit_info.entity)
-                destroy(self)
+            from weapons import ExplosionParticle
+            for _ in range(random.randint(15, 25)):
+                ExplosionParticle(pos=impact_position)
+
+            hit_info.entity.split()
+            destroy(self)
+        else:
+            # Si no hay nada en el camino, avanzamos de forma normal
+            self.position += self.forward * distancia_avance

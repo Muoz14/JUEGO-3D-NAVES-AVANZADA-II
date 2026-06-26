@@ -5,8 +5,6 @@ import math
 
 
 class SpeedLine(Entity):
-    """Línea de velocidad individual en 2D que radia desde el centro hacia los bordes"""
-
     def __init__(self, **kwargs):
         super().__init__(parent=camera.ui, model='quad', color=color.rgba(200, 240, 255, 70), z=-1.1, **kwargs)
         self.angle = random.uniform(0, math.tau)
@@ -29,9 +27,99 @@ class SpeedLine(Entity):
         if self.distance > 1.2 or self.alpha <= 0: destroy(self)
 
 
-class PlayerShip(Entity):
-    """Clase de la nave maestra adaptada para soportar marioneta cinemática y físicas avanzadas"""
+class TacticalScanner:
+    def __init__(self, player):
+        self.player = player
+        self.active = False
+        self.scan_radius = 250
+        self.max_targets = 6
+        self.markers = []
+        self.active_timer = 0
 
+        self.scan_line = Entity(parent=camera.ui, model='quad', scale=(2.5, 0.03), color=color.cyan, z=-3,
+                                enabled=False)
+        self.analyzing_text = Text(parent=camera.ui, text='ANALIZANDO...', position=(0, 0.35), origin=(0, 0), scale=2.5,
+                                   color=color.white, enabled=False)
+
+    def toggle(self, force_off=False):
+        if force_off:
+            self.active = False
+        else:
+            self.active = not self.active
+
+        if self.active:
+            self.active_timer = 4.0
+            self.play_scan_animation()
+            self.scan_environment()
+        else:
+            self.clear_markers()
+
+    def play_scan_animation(self):
+        self.scan_line.enabled = True
+        self.scan_line.y = 0.5
+        self.scan_line.animate_y(-0.5, duration=0.6, curve=curve.linear)
+        invoke(self.scan_line.disable, delay=0.6)
+        self.analyzing_text.enabled = True
+        invoke(self.analyzing_text.disable, delay=2.0)
+
+    def scan_environment(self):
+        self.clear_markers()
+
+        asteroids_in_range = []
+        for entity in scene.entities:
+            if hasattr(entity, 'is_asteroid') and entity.enabled:
+                dist = distance(self.player.position, entity.position)
+                if dist <= self.scan_radius:
+                    asteroids_in_range.append((dist, entity))
+
+        asteroids_in_range.sort(key=lambda x: x[0])
+        top_targets = asteroids_in_range[:self.max_targets]
+
+        for dist, entity in top_targets:
+            marker = Entity(parent=entity, billboard=True)
+            marker.scale = (0, 0, 0)
+            marker.animate_scale((1, 1, 1), duration=0.4, curve=curve.out_back)
+
+            c = color.rgba(0, 255, 255, 180)
+            Entity(parent=marker, model='quad', scale=(2.0, 0.05), position=(0, 1.0, 0), color=c, unlit=True)
+            Entity(parent=marker, model='quad', scale=(2.0, 0.05), position=(0, -1.0, 0), color=c, unlit=True)
+            Entity(parent=marker, model='quad', scale=(0.05, 2.0), position=(1.0, 0, 0), color=c, unlit=True)
+            Entity(parent=marker, model='quad', scale=(0.05, 2.0), position=(-1.0, 0, 0), color=c, unlit=True)
+
+            marker.text_dist = Text(parent=marker, text=f'{int(dist)}m', position=(0, -1.4, 0), origin=(0, 0), scale=4,
+                                    color=color.cyan)
+            self.markers.append(marker)
+
+    def update(self):
+        if not self.active: return
+        self.active_timer -= time.dt
+        if self.active_timer <= 0:
+            self.toggle(force_off=True)
+            return
+
+        for marker in self.markers[:]:
+            if not marker.parent or marker.parent not in scene.entities or not marker.parent.enabled:
+                destroy(marker)
+                self.markers.remove(marker)
+                continue
+
+            dist = distance(self.player.position, marker.parent.position)
+            if dist > self.scan_radius:
+                destroy(marker)
+                self.markers.remove(marker)
+                continue
+
+            marker.text_dist.text = f'{int(dist)}m'
+            marker.text_dist.color = color.red if dist < 120 else color.cyan
+
+    def clear_markers(self):
+        for marker in self.markers:
+            marker.animate_scale((0, 0, 0), duration=0.2)
+            destroy(marker, delay=0.2)
+        self.markers.clear()
+
+
+class PlayerShip(Entity):
     def __init__(self, game_over_menu=None, **kwargs):
         super().__init__(model='assets/nave1/SpaceShip.obj', color=color.white, scale=(0.2, 0.2, 0.2),
                          position=(0, 0, 0), collider='box', **kwargs)
@@ -45,8 +133,8 @@ class PlayerShip(Entity):
         self.error_spawn_timer = 0.0
         self.speed_line_timer = 0.0
 
-        self.right_laser_offset = (2.4, -0.5, -0.6)
-        self.left_laser_offset = (-2.4, -0.5, -0.6)
+        self.right_laser_offset = (3.5, -0.5, -5.5)
+        self.left_laser_offset = (-3.5, -0.5, -5.5)
 
         self.target_speed = 0
         self.current_speed = 0
@@ -85,6 +173,8 @@ class PlayerShip(Entity):
         self.trail_timer = 0
 
         self.thrusters = []
+        self.scanner = TacticalScanner(self)
+
         for offset_x in [-0.6, 0.6]:
             t = Entity(parent=self, model='sphere', color=color.cyan, scale=(0.2, 0.2, 0.6),
                        position=(offset_x, -0.15, 1.1))
@@ -235,10 +325,13 @@ class PlayerShip(Entity):
 
     def die(self):
         self.is_dead = True
+        self.clear_persistent_ui()
         self.hud_container.disable()
         camera.ui.x = 0
         camera.ui.y = 0
         self.camera_pivot.position = Vec3(0, 0, 0)
+        self.scanner.clear_markers()
+        self.scanner.active = False
         if self.game_over_menu: self.game_over_menu.enabled = True
         mouse.locked = False
         self.visible = False
@@ -264,6 +357,8 @@ class PlayerShip(Entity):
         self.heat_bar.color = color.orange
         self.tacho_needle.color = color.hex('#ff3333')
         self.speedometer.color = color.white
+        self.scanner.clear_markers()
+        self.scanner.active = False
 
         self.hud_container.enable()
         self.damage_flash_overlay.alpha = 0
@@ -274,7 +369,19 @@ class PlayerShip(Entity):
         for crack in self.screen_cracks: crack.enabled = False
         for t in self.thrusters: t.visible = True
 
+        self.clear_persistent_ui()
+
+    def clear_persistent_ui(self):
+        """CORRECCIÓN: Solo apagamos el texto/líneas de la táctica, SIN tocar sus 'parents'"""
+        if hasattr(self, 'scanner') and self.scanner:
+            self.scanner.clear_markers()
+            if hasattr(self.scanner, 'analyzing_text') and self.scanner.analyzing_text:
+                self.scanner.analyzing_text.enabled = False
+            if hasattr(self.scanner, 'scan_line') and self.scanner.scan_line:
+                self.scanner.scan_line.enabled = False
+
     def update(self):
+        if hasattr(self, 'scanner'): self.scanner.update()
         if self.is_dead:
             self.current_speed = lerp(self.current_speed, 0, time.dt * self.friction)
             self.speedometer.text = str(int(abs(self.current_speed)))
@@ -286,22 +393,25 @@ class PlayerShip(Entity):
                 t.visible = False
             return
 
-        # ==========================================================
-        # CONTROL DE TRANSICIÓN: Durante la fase final de escaneo
-        # ==========================================================
         if self.is_cinematic:
-            # Propulsores en ralentí espacial estable
             for t in self.thrusters:
                 t.scale_z = lerp(t.scale_z, random.uniform(0.3, 0.5), time.dt * 12)
                 t.color = color.rgba(0, 180, 255, 120)
             return
 
+            # Choque físico y fragmentación
         hit_info = self.intersects()
         if hit_info.hit and hasattr(hit_info.entity, 'is_asteroid'):
             from weapons import ExplosionParticle
             for _ in range(25):
-                ExplosionParticle(pos=hit_info.entity.position)
-            destroy(hit_info.entity)
+                 ExplosionParticle(pos=hit_info.entity.position)
+
+            # FÍSICA CORREGIDA: Rebote cortito y rechazo suave
+            rebound_dir = (self.position - hit_info.entity.position).normalized()
+            self.position += rebound_dir * 1.5  # Empujón ligero (antes era 5)
+            self.current_speed = -self.current_speed * 0.15  # Freno leve, no te manda a volar hacia atrás
+
+            hit_info.entity.split()
             self.take_damage(30)
             return
 
@@ -536,3 +646,5 @@ class PlayerShip(Entity):
             self.start_dash(-1)
         if key == 'd' and self.dash_timer <= 0 and self.boost_fuel >= 15:
             self.start_dash(1)
+        if key == 'x':
+            self.scanner.toggle()
