@@ -1,5 +1,6 @@
 from ursina import *
 from weapons import DualLaser
+from map import TacticalMap
 import random
 import math
 
@@ -37,7 +38,7 @@ class MaterialPopup(Entity):
         Entity(parent=self.bg, model='quad', color=color.cyan, scale=(0.02, 1), position=(-0.5, 0), z=-0.01)
         Entity(parent=self.bg, model='quad', color=color.cyan, scale=(0.2, 0.05), position=(0.4, 0.475), z=-0.01)
 
-        Text(parent=self, text='[ ANÁLISIS MINERAL ]', position=(0.02, -0.02), scale=1.2, color=color.cyan, z=-1)
+        Text(parent=self, text='[ ANALISIS MINERAL ]', position=(0.02, -0.02), scale=1.2, color=color.cyan, z=-1)
         Text(parent=self, text=self.target.material_name, position=(0.02, -0.06), scale=1.8, color=color.white, z=-1)
         Text(parent=self, text=f"Tipo: {self.target.material_desc}", position=(0.02, -0.11), scale=1.1,
              color=color.light_gray, z=-1)
@@ -242,6 +243,7 @@ class PlayerShip(Entity):
 
         self.thrusters = []
         self.scanner = TacticalScanner(self)
+        self.tactical_map = TacticalMap(self)
 
         for offset_x in [-0.6, 0.6]:
             t = Entity(parent=self, model='sphere', color=color.cyan, scale=(0.2, 0.2, 0.6),
@@ -294,17 +296,11 @@ class PlayerShip(Entity):
         self.warning_text = Text(parent=self.hud_container, text='¡PELIGRO: NAVE INVERTIDA!', position=(0, 0.35),
                                  origin=(0, 0), color=color.red, scale=1.5, enabled=False)
 
-        # ==========================================================
-        # BRÚJULA TÁCTICA MINIMALISTA FLOTANTE Y AMPLIADA
-        # ==========================================================
-        # Nodo invisible de anclaje de posición
+        # BRÚJULA TÁCTICA
         self.compass_bg = Entity(parent=self.hud_container, position=(0, 0.43), z=-1)
-
-        # Indicador central (muesca) en cian
         self.compass_marker = Entity(parent=self.hud_container, model='quad', color=color.cyan, scale=(0.003, 0.016),
                                      position=(0, 0.45), z=-1.1)
 
-        # Marcadores cardinales y numéricos cada 30 grados
         self.compass_points = [
             ('N', 0), ('30', 30), ('NE', 45), ('60', 60),
             ('E', 90), ('120', 120), ('SE', 135), ('150', 150),
@@ -315,6 +311,13 @@ class PlayerShip(Entity):
         for label, angle in self.compass_points:
             t = Text(parent=self.hud_container, text=label, scale=0.8, color=color.white, origin=(0, 0), z=-1.2)
             self.compass_labels.append((t, angle))
+
+        # Marcadores del Waypoint en la Brújula
+        self.waypoint_compass_marker = Entity(parent=self.hud_container, model='triangle', color=color.yellow,
+                                              scale=(0.015, 0.015), position=(0, 0.46), z=-1.3, rotation_z=180,
+                                              enabled=False)
+        self.waypoint_compass_dist = Text(parent=self.hud_container, text='0m', scale=0.7, color=color.yellow,
+                                          origin=(0, 0), position=(0, 0.40), z=-1.3, enabled=False)
 
         # TACÓMETRO E INSTRUMENTAL
         tacho_center_x = -0.72
@@ -433,6 +436,11 @@ class PlayerShip(Entity):
         self.camera_pivot.position = Vec3(0, 0, 0)
         self.scanner.clear_markers()
         self.scanner.active = False
+
+        # Cerrar el mapa si mueres
+        if getattr(self.tactical_map, 'is_open', False):
+            self.tactical_map.toggle()
+
         if self.game_over_menu: self.game_over_menu.enabled = True
         mouse.locked = False
         self.visible = False
@@ -461,6 +469,14 @@ class PlayerShip(Entity):
         self.speedometer.color = color.white
         self.scanner.clear_markers()
         self.scanner.active = False
+
+        # Reset del mapa
+        if getattr(self.tactical_map, 'is_open', False):
+            self.tactical_map.toggle()
+        self.tactical_map.clear_waypoint()
+
+        self.waypoint_compass_marker.enabled = False
+        self.waypoint_compass_dist.enabled = False
         self.oob_timer = 10.0
 
         self.hud_container.enable()
@@ -490,9 +506,6 @@ class PlayerShip(Entity):
         self.compass_bg.enabled = not hide_ui
         self.compass_marker.enabled = not hide_ui
 
-        # ==========================================================
-        # ACTUALIZACIÓN DE BRÚJULA TÁCTICA EXPANDIDA PANORÁMICA
-        # ==========================================================
         current_heading = self.rotation_y % 360
         for lbl_text, angle in self.compass_labels:
             if hide_ui:
@@ -503,14 +516,11 @@ class PlayerShip(Entity):
             if diff > 180:
                 diff -= 360
 
-            # Rango visual ampliado a 60 grados para poblar la línea más larga
             if abs(diff) < 60:
                 lbl_text.enabled = True
-                # Multiplicador aumentado a 0.35 para estirar horizontalmente por la pantalla
                 lbl_text.x = (diff / 60) * 0.35
                 lbl_text.y = 0.44
 
-                # Desvanecimiento dinámico adaptado al nuevo ancho de 60 grados
                 alpha_factor = 1.0 - (abs(diff) / 60.0)
                 txt = lbl_text.text
 
@@ -522,6 +532,40 @@ class PlayerShip(Entity):
                     lbl_text.color = color.rgba(220, 220, 225, int(190 * alpha_factor))
             else:
                 lbl_text.enabled = False
+
+        # LOGICA DEL WAYPOINT DINÁMICO (Escalado por proximidad)
+        if getattr(self.tactical_map, 'waypoint_pos_3d', None) and not hide_ui:
+            wp_pos = self.tactical_map.waypoint_pos_3d
+            dist_to_wp = distance(self.position, wp_pos)
+
+            if dist_to_wp < 150:
+                self.tactical_map.clear_waypoint()
+                self.waypoint_compass_marker.enabled = False
+                self.waypoint_compass_dist.enabled = False
+            else:
+                self.waypoint_compass_marker.enabled = True
+                self.waypoint_compass_dist.enabled = True
+
+                # --- ESCALADO PROGRESIVO SEGÚN LA PROXIMIDAD ---
+                scale_factor = clamp(dist_to_wp / 1500, 0.15, 1.0)
+                self.tactical_map.world_waypoint.scale = Vec3(10, 40, 10) * scale_factor
+
+                dir_to_wp = wp_pos - self.position
+                angle_to_wp = math.degrees(math.atan2(dir_to_wp.x, dir_to_wp.z)) % 360
+
+                diff_wp = (angle_to_wp - current_heading) % 360
+                if diff_wp > 180: diff_wp -= 360
+
+                if abs(diff_wp) < 60:
+                    self.waypoint_compass_marker.x = (diff_wp / 60) * 0.35
+                    self.waypoint_compass_dist.x = (diff_wp / 60) * 0.35
+                    self.waypoint_compass_dist.text = f"{int(dist_to_wp)}m"
+                else:
+                    self.waypoint_compass_marker.enabled = False
+                    self.waypoint_compass_dist.enabled = False
+        else:
+            self.waypoint_compass_marker.enabled = False
+            self.waypoint_compass_dist.enabled = False
 
         if self.is_dead:
             self.current_speed = lerp(self.current_speed, 0, time.dt * self.friction)
@@ -540,7 +584,6 @@ class PlayerShip(Entity):
                 t.color = color.rgba(0, 180, 255, 120)
             return
 
-        # LÍMITES DEL SECTOR
         distancia_centro = self.position.length()
         if distancia_centro > self.sector_radius:
             self.oob_warning.enabled = True
@@ -580,7 +623,6 @@ class PlayerShip(Entity):
                 camera.ui.x = 0
                 camera.ui.y = 0
 
-        # PLANETA O ASTEROIDES COLISIÓN
         hit_info = self.intersects()
         if hit_info.hit:
             ent = hit_info.entity
@@ -810,6 +852,7 @@ class PlayerShip(Entity):
 
     def input(self, key):
         if self.is_dead or self.is_cinematic: return
+
         if key == 'v':
             self.current_cam_index += 1
             if self.current_cam_index >= len(self.camera_modes):
@@ -821,3 +864,4 @@ class PlayerShip(Entity):
             self.start_dash(1)
         if key == 'x':
             self.scanner.toggle()
+        # Se borró la "M" de aquí para evitar problemas con la pausa general
