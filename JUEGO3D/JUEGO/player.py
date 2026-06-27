@@ -173,7 +173,11 @@ class TacticalScanner:
                 continue
 
             marker.text_dist.text = f'{int(dist)}m'
-            marker.text_dist.color = color.red if dist < 120 else color.cyan
+
+            # OPTIMIZACIÓN: Solo reasigna el color si realmente cambió
+            new_c = color.red if dist < 120 else color.cyan
+            if marker.text_dist.color != new_c:
+                marker.text_dist.color = new_c
 
     def clear_markers(self):
         for marker in self.markers:
@@ -245,8 +249,14 @@ class PlayerShip(Entity):
         self.scanner = TacticalScanner(self)
         self.tactical_map = TacticalMap(self)
 
+        # OPTIMIZACIÓN: Pre-calculamos los colores de los motores
+        self.color_boost = color.rgb(0, 255, 255)
+        self.color_w = color.cyan
+        self.color_s = color.blue
+        self.color_idle = color.rgba(0, 180, 255, 120)
+
         for offset_x in [-0.6, 0.6]:
-            t = Entity(parent=self, model='sphere', color=color.cyan, scale=(0.2, 0.2, 0.6),
+            t = Entity(parent=self, model='sphere', color=self.color_idle, scale=(0.2, 0.2, 0.6),
                        position=(offset_x, -0.15, 1.1))
             self.thrusters.append(t)
 
@@ -307,9 +317,19 @@ class PlayerShip(Entity):
             ('S', 180), ('210', 210), ('SW', 225), ('240', 240),
             ('W', 270), ('300', 300), ('NW', 315), ('330', 330)
         ]
+
         self.compass_labels = []
         for label, angle in self.compass_points:
-            t = Text(parent=self.hud_container, text=label, scale=0.8, color=color.white, origin=(0, 0), z=-1.2)
+            # OPTIMIZACIÓN: Le damos el color base desde el inicio
+            if label in ['N', 'S', 'E', 'W']:
+                base_c = color.cyan
+            elif label in ['NE', 'SE', 'SW', 'NW']:
+                base_c = color.white
+            else:
+                base_c = color.light_gray
+
+            t = Text(parent=self.hud_container, text=label, scale=0.8, color=base_c, origin=(0, 0), z=-1.2,
+                     enabled=False)
             self.compass_labels.append((t, angle))
 
         # Marcadores del Waypoint en la Brújula
@@ -398,7 +418,7 @@ class PlayerShip(Entity):
                             self.forward * -1.5)
                     p.animate_position(pos_final, duration=duracion_vida, curve=curve.out_sine)
                     destroy(p, delay=duracion_vida + 0.05)
-            self.trail_timer = 0.025
+            self.trail_timer = 0.035  # OPTIMIZACIÓN: Bajamos un pelito la frecuencia de partículas
 
     def start_dash(self, direction):
         self.is_dashing = True
@@ -437,7 +457,6 @@ class PlayerShip(Entity):
         self.scanner.clear_markers()
         self.scanner.active = False
 
-        # Cerrar el mapa si mueres
         if getattr(self.tactical_map, 'is_open', False):
             self.tactical_map.toggle()
 
@@ -470,7 +489,6 @@ class PlayerShip(Entity):
         self.scanner.clear_markers()
         self.scanner.active = False
 
-        # Reset del mapa
         if getattr(self.tactical_map, 'is_open', False):
             self.tactical_map.toggle()
         self.tactical_map.clear_waypoint()
@@ -509,7 +527,7 @@ class PlayerShip(Entity):
         current_heading = self.rotation_y % 360
         for lbl_text, angle in self.compass_labels:
             if hide_ui:
-                lbl_text.enabled = False
+                if lbl_text.enabled: lbl_text.enabled = False
                 continue
 
             diff = (angle - current_heading) % 360
@@ -517,36 +535,29 @@ class PlayerShip(Entity):
                 diff -= 360
 
             if abs(diff) < 60:
-                lbl_text.enabled = True
+                if not lbl_text.enabled: lbl_text.enabled = True
                 lbl_text.x = (diff / 60) * 0.35
                 lbl_text.y = 0.44
 
-                alpha_factor = 1.0 - (abs(diff) / 60.0)
-                txt = lbl_text.text
-
-                if txt in ['N', 'S', 'E', 'W']:
-                    lbl_text.color = color.rgba(0, 255, 255, int(255 * alpha_factor))
-                elif txt in ['NE', 'SE', 'SW', 'NW']:
-                    lbl_text.color = color.rgba(255, 255, 255, int(255 * alpha_factor))
-                else:
-                    lbl_text.color = color.rgba(220, 220, 225, int(190 * alpha_factor))
+                # OPTIMIZACIÓN MÁXIMA: Modificamos SOLO el canal alpha, nada de regenerar mallas
+                lbl_text.alpha = 1.0 - (abs(diff) / 60.0)
             else:
-                lbl_text.enabled = False
+                if lbl_text.enabled: lbl_text.enabled = False
 
-        # LOGICA DEL WAYPOINT DINÁMICO (Escalado por proximidad)
         if getattr(self.tactical_map, 'waypoint_pos_3d', None) and not hide_ui:
             wp_pos = self.tactical_map.waypoint_pos_3d
             dist_to_wp = distance(self.position, wp_pos)
 
             if dist_to_wp < 150:
                 self.tactical_map.clear_waypoint()
-                self.waypoint_compass_marker.enabled = False
-                self.waypoint_compass_dist.enabled = False
+                if self.waypoint_compass_marker.enabled:
+                    self.waypoint_compass_marker.enabled = False
+                    self.waypoint_compass_dist.enabled = False
             else:
-                self.waypoint_compass_marker.enabled = True
-                self.waypoint_compass_dist.enabled = True
+                if not self.waypoint_compass_marker.enabled:
+                    self.waypoint_compass_marker.enabled = True
+                    self.waypoint_compass_dist.enabled = True
 
-                # --- ESCALADO PROGRESIVO SEGÚN LA PROXIMIDAD ---
                 scale_factor = clamp(dist_to_wp / 1500, 0.15, 1.0)
                 self.tactical_map.world_waypoint.scale = Vec3(10, 40, 10) * scale_factor
 
@@ -564,8 +575,9 @@ class PlayerShip(Entity):
                     self.waypoint_compass_marker.enabled = False
                     self.waypoint_compass_dist.enabled = False
         else:
-            self.waypoint_compass_marker.enabled = False
-            self.waypoint_compass_dist.enabled = False
+            if self.waypoint_compass_marker.enabled:
+                self.waypoint_compass_marker.enabled = False
+                self.waypoint_compass_dist.enabled = False
 
         if self.is_dead:
             self.current_speed = lerp(self.current_speed, 0, time.dt * self.friction)
@@ -575,30 +587,30 @@ class PlayerShip(Entity):
             self.camera_pivot.position = lerp(self.camera_pivot.position, Vec3(0, 0, 0), time.dt * 15)
             for t in self.thrusters:
                 t.scale_z = lerp(t.scale_z, 0, time.dt * 15)
-                t.visible = False
+                if t.visible: t.visible = False
             return
 
         if self.is_cinematic:
             for t in self.thrusters:
                 t.scale_z = lerp(t.scale_z, random.uniform(0.3, 0.5), time.dt * 12)
-                t.color = color.rgba(0, 180, 255, 120)
+                if t.color != self.color_idle: t.color = self.color_idle
             return
 
         distancia_centro = self.position.length()
         if distancia_centro > self.sector_radius:
-            self.oob_warning.enabled = True
+            if not self.oob_warning.enabled: self.oob_warning.enabled = True
             self.damage_flash_overlay.alpha = random.uniform(0.2, 0.4)
             self.shake_amount = max(self.shake_amount, 0.25)
 
             self.oob_timer -= time.dt
-            self.oob_warning.text = f'<red>¡ADVERTENCIA CRÍTICA!\n<white>ABANDONANDO SECTOR DE EXTRACCIÓN ALFA\n<red>DESPRESURIZACIÓN EN: {max(0, int(self.oob_timer))}s'
+            self.oob_warning.text = f'<red>¡ADVERTENCIA CRITICA!\n<white>ABANDONANDO SECTOR DE EXTRACCION ALFA\n<red>DESPRESURIZACION EN: {max(0, int(self.oob_timer))}s'
 
             if self.oob_timer <= 0:
                 self.shield = 0
                 self.die()
                 return
         else:
-            self.oob_warning.enabled = False
+            if self.oob_warning.enabled: self.oob_warning.enabled = False
             self.oob_timer = 10.0
 
             if self.shield <= 15:
@@ -611,8 +623,8 @@ class PlayerShip(Entity):
 
                 self.error_spawn_timer -= time.dt
                 if self.error_spawn_timer <= 0:
-                    mensajes_error = ["SISTEMA DEFECTUOSO", "NÚCLEO CRÍTICO", "ERROR: 0x00F8C3", "FUGA DE VOLTAJE",
-                                      "FALLO ESTRUCTURAL", "PRESIÓN BAJA"]
+                    mensajes_error = ["SISTEMA DEFECTUOSO", "NUCLEO CRITICO", "ERROR: 0x00F8C3", "FUGA DE VOLTAJE",
+                                      "FALLO ESTRUCTURAL", "PRESION BAJA"]
                     err_txt = Text(text=random.choice(mensajes_error),
                                    position=(random.uniform(-0.4, 0.4), random.uniform(-0.2, 0.2)), color=color.red,
                                    scale=random.uniform(1.1, 1.5), parent=self.hud_container)
@@ -645,13 +657,17 @@ class PlayerShip(Entity):
         if self.damage_flash_overlay.alpha > 0 and distancia_centro <= self.sector_radius:
             self.damage_flash_overlay.alpha = lerp(self.damage_flash_overlay.alpha, 0, time.dt * 6)
 
+        # OPTIMIZACIÓN: Cambio de color de escudo seguro
+        target_shield_c = color.red if self.shield <= 15 else color.cyan
+        if self.shield_bar.color != target_shield_c:
+            self.shield_bar.color = target_shield_c
+
         self.shield_bar.scale_x = self.shield / self.max_shield
-        self.shield_bar.color = color.red if self.shield <= 15 else color.cyan
 
         if self.up.y < -0.1:
-            self.warning_text.enabled = True
+            if not self.warning_text.enabled: self.warning_text.enabled = True
         else:
-            self.warning_text.enabled = False
+            if self.warning_text.enabled: self.warning_text.enabled = False
 
         is_boosting = held_keys['space'] and self.boost_fuel > 0
 
@@ -683,20 +699,22 @@ class PlayerShip(Entity):
 
         if is_boosting:
             target_scale_z = random.uniform(3.5, 4.8)
-            thruster_color = color.rgb(0, 255, 255)
+            t_color = self.color_boost
         elif held_keys['w']:
             target_scale_z = random.uniform(1.3, 1.6)
-            thruster_color = color.cyan
+            t_color = self.color_w
         elif held_keys['s']:
             target_scale_z = 0.15
-            thruster_color = color.blue
+            t_color = self.color_s
         else:
             target_scale_z = random.uniform(0.3, 0.5)
-            thruster_color = color.rgba(0, 180, 255, 120)
+            t_color = self.color_idle
 
         for t in self.thrusters:
             t.scale_z = lerp(t.scale_z, target_scale_z, time.dt * 12)
-            t.color = thruster_color
+            if t.color != t_color:
+                t.color = t_color
+
             if is_boosting or held_keys['w']:
                 t.scale_x = lerp(t.scale_x, random.uniform(0.18, 0.24), time.dt * 20)
                 t.scale_y = t.scale_x
@@ -727,12 +745,11 @@ class PlayerShip(Entity):
         self.speedometer.text = str(display_speed)
         self.tacho_needle.rotation_z = -130 + (speed_ratio * 260)
 
-        if speed_ratio > 0.8:
-            self.tacho_needle.color = color.red
-            self.speedometer.color = color.orange
-        else:
-            self.tacho_needle.color = color.hex('#ff3333')
-            self.speedometer.color = color.white
+        # OPTIMIZACIÓN: Tacómetro sin lag
+        new_tacho_c = color.red if speed_ratio > 0.8 else color.hex('#ff3333')
+        if self.tacho_needle.color != new_tacho_c:
+            self.tacho_needle.color = new_tacho_c
+            self.speedometer.color = color.orange if speed_ratio > 0.8 else color.white
 
         if held_keys['right mouse']:
             self.camera_pivot.rotation_y += mouse.velocity[0] * self.mouse_sensitivity
@@ -814,24 +831,29 @@ class PlayerShip(Entity):
                                                                       time.dt * 3)
         self.heat = clamp(self.heat, 0, self.max_heat)
 
+        # OPTIMIZACIÓN: Barra de calor segura
         if self.heat > 1:
-            self.heat_widget.enabled = True
+            if not self.heat_widget.enabled: self.heat_widget.enabled = True
             alpha_val = clamp(self.heat / 20, 0, 1)
-            self.heat_bar.color = color.rgba(255, 165, 0, int(255 * alpha_val)) if not self.overheated else color.rgba(
-                255, 50, 50, int(255 * alpha_val))
-            self.heat_bar_bg.color = color.rgba(0, 0, 0, int(150 * alpha_val))
+
+            target_bar_color = color.red if self.overheated else color.orange
+            if self.heat_bar.color != target_bar_color:
+                self.heat_bar.color = target_bar_color
+
+            self.heat_bar.alpha = alpha_val
+            self.heat_bar_bg.alpha = alpha_val * (150 / 255)
         else:
-            self.heat_widget.enabled = False
+            if self.heat_widget.enabled: self.heat_widget.enabled = False
 
         self.heat_bar.scale_x = self.heat / self.max_heat
 
         if self.heat >= self.max_heat and not self.overheated:
             self.overheated = True
-            self.overheat_text.enabled = True
+            if not self.overheat_text.enabled: self.overheat_text.enabled = True
 
         if self.overheated and self.heat <= 20:
             self.overheated = False
-            self.overheat_text.enabled = False
+            if self.overheat_text.enabled: self.overheat_text.enabled = False
 
         if held_keys['left mouse'] and not self.overheated and self.fire_timer <= 0:
             true_aim_rotation = Vec3(self.base_pitch, self.rotation_y, self.rotation_z)
@@ -848,10 +870,8 @@ class PlayerShip(Entity):
             self.current_fire_rate = max(self.min_fire_rate, self.current_fire_rate - 0.05)
             self.fire_timer = self.current_fire_rate
 
-        self.heat_bar.scale_x = self.heat / self.max_heat
-
     def input(self, key):
-        if self.is_dead or self.is_cinematic: return
+        if self.is_dead or (self.is_cinematic and not getattr(self.tactical_map, 'is_open', False)): return
 
         if key == 'v':
             self.current_cam_index += 1
@@ -864,4 +884,3 @@ class PlayerShip(Entity):
             self.start_dash(1)
         if key == 'x':
             self.scanner.toggle()
-        # Se borró la "M" de aquí para evitar problemas con la pausa general
